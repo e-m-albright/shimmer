@@ -14,7 +14,7 @@ const TRAY_ID: &str = "shimmer-tray";
 
 use encryption::{decrypt, encrypt};
 use key_store::KeyStore;
-use storage::{create_storage, Storage};
+use storage::{create_storage, PasteEntry, Storage};
 
 /// Max paste size: 1 MiB to prevent abuse and memory issues.
 const MAX_PASTE_BYTES: usize = 1024 * 1024;
@@ -129,6 +129,50 @@ async fn paste_fetch(
     String::from_utf8(decrypted).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn paste_list(
+    storage: tauri::State<'_, Arc<dyn Storage>>,
+) -> Result<Vec<PasteEntry>, String> {
+    storage.list().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn paste_delete(
+    id: String,
+    storage: tauri::State<'_, Arc<dyn Storage>>,
+) -> Result<(), String> {
+    let id = id.trim().trim_start_matches("phi://").split('/').next().unwrap_or("").trim();
+    if id.is_empty() {
+        return Err("Invalid ID".to_string());
+    }
+    storage.delete(id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_settings(
+    key_store: tauri::State<'_, Arc<KeyStore>>,
+) -> Result<serde_json::Value, String> {
+    let storage_type = if std::env::var("SHIMMER_USE_FILE_STORAGE").ok().as_deref() == Some("1")
+        || std::env::var("SHIMMER_S3_ENDPOINT").is_err()
+    {
+        "file"
+    } else {
+        "s3"
+    };
+    let prefix = std::env::var("SHIMMER_USER_PREFIX").unwrap_or_else(|_| "dev-user".into());
+    let key_hex = hex::encode(&key_store.key()[..4]);
+
+    Ok(serde_json::json!({
+        "storageType": storage_type,
+        "storagePath": std::env::var("SHIMMER_STORAGE_PATH").unwrap_or_else(|_| "./shimmer-dev-storage".into()),
+        "s3Endpoint": std::env::var("SHIMMER_S3_ENDPOINT").unwrap_or_default(),
+        "s3Bucket": std::env::var("SHIMMER_S3_BUCKET").unwrap_or_else(|_| "shimmer".into()),
+        "userPrefix": prefix,
+        "keyFingerprint": format!("{}…", key_hex),
+        "hotkey": "⌘+⇧+P",
+    }))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let storage = tokio::runtime::Runtime::new()
@@ -183,7 +227,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_deep_link::init())
         .manage(storage)
-        .invoke_handler(tauri::generate_handler![paste_upload, paste_fetch])
+        .invoke_handler(tauri::generate_handler![paste_upload, paste_fetch, paste_list, paste_delete, get_settings])
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().ok();
             let key_store = Arc::new(KeyStore::load_or_create(app_data_dir.as_deref()));

@@ -13,11 +13,21 @@ use aws_sdk_s3::config::Region;
 use aws_sdk_s3::primitives::ByteStream;
 use std::error::Error;
 
+/// Metadata for a stored paste.
+#[derive(serde::Serialize, Clone)]
+pub struct PasteEntry {
+    pub id: String,
+    pub size: u64,
+    pub created: String, // ISO 8601
+}
+
 /// Storage backend trait - implement for S3, MinIO, or mock.
 #[async_trait::async_trait]
 pub trait Storage: Send + Sync {
     async fn put(&self, key: &str, data: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>>;
     async fn get(&self, key: &str) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>>;
+    async fn list(&self) -> Result<Vec<PasteEntry>, Box<dyn Error + Send + Sync>>;
+    async fn delete(&self, key: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 
 /// S3/MinIO-compatible storage.
@@ -92,6 +102,47 @@ impl Storage for S3Storage {
         let data = resp.body.collect().await?.into_bytes();
         Ok(data.to_vec())
     }
+
+    async fn list(&self) -> Result<Vec<PasteEntry>, Box<dyn Error + Send + Sync>> {
+        let prefix = if self.prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", self.prefix)
+        };
+        let resp = self.client
+            .list_objects_v2()
+            .bucket(&self.bucket)
+            .prefix(&prefix)
+            .send()
+            .await?;
+        let mut entries = Vec::new();
+        if let Some(contents) = resp.contents {
+            for obj in contents {
+                let key = obj.key.unwrap_or_default();
+                let id = key.strip_prefix(&prefix).unwrap_or(&key).to_string();
+                if id.is_empty() { continue; }
+                entries.push(PasteEntry {
+                    id,
+                    size: obj.size.unwrap_or(0) as u64,
+                    created: obj.last_modified
+                        .map(|t| t.fmt(aws_sdk_s3::primitives::DateTimeFormat::DateTime).unwrap_or_default())
+                        .unwrap_or_default(),
+                });
+            }
+        }
+        Ok(entries)
+    }
+
+    async fn delete(&self, key: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let full_key = self.full_key(key);
+        self.client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(&full_key)
+            .send()
+            .await?;
+        Ok(())
+    }
 }
 
 /// File-based storage for dev when MinIO isn't running.
@@ -137,6 +188,46 @@ impl Storage for FileStorage {
         let path = self.path_for(key);
         let data = std::fs::read(&path)?;
         Ok(data)
+    }
+
+    async fn list(&self) -> Result<Vec<PasteEntry>, Box<dyn Error + Send + Sync>> {
+        let dir = if self.prefix.is_empty() {
+            self.base_path.clone()
+        } else {
+            self.base_path.join(&self.prefix)
+        };
+        let mut entries = Vec::new();
+        if dir.exists() {
+            for entry in std::fs::read_dir(&dir)? {
+                let entry = entry?;
+                let meta = entry.metadata()?;
+                if !meta.is_file() { continue; }
+                let id = entry.file_name().to_string_lossy().to_string();
+                let created = meta.created()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| {
+                        let secs = d.as_secs() as i64;
+                        chrono::DateTime::from_timestamp(secs, 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_default()
+                    })
+                    .unwrap_or_default();
+                entries.push(PasteEntry {
+                    id,
+                    size: meta.len(),
+                    created,
+                });
+            }
+        }
+        entries.sort_by(|a, b| b.created.cmp(&a.created));
+        Ok(entries)
+    }
+
+    async fn delete(&self, key: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let path = self.path_for(key);
+        std::fs::remove_file(&path)?;
+        Ok(())
     }
 }
 

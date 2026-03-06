@@ -10,3 +10,4 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 /shimmer-dev-storage
 src-tauri/target
+.claude/
