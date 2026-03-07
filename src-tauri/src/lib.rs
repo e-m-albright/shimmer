@@ -3,16 +3,19 @@
 //! TODO(OIDC): Integrate JumpCloud OIDC for SSO. Use dev user id until then.
 
 mod encryption;
+mod error;
 mod key_store;
 mod storage;
 
 use std::sync::Arc;
 use tauri::{image::Image, menu::{Menu, MenuItem}, tray::TrayIconBuilder, Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
+use tracing::{debug, info};
 
 const TRAY_ID: &str = "shimmer-tray";
 
 use encryption::{decrypt, encrypt};
+use error::CommandError;
 use key_store::KeyStore;
 use storage::{create_storage, PasteEntry, Storage};
 
@@ -89,22 +92,31 @@ async fn paste_upload(
     plaintext: String,
     storage: tauri::State<'_, Arc<dyn Storage>>,
     key_store: tauri::State<'_, Arc<KeyStore>>,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     let trimmed = plaintext.trim();
     if trimmed.starts_with("phi://") {
-        return Err("That's a phi link — paste it in Fetch to view the content, not Upload".to_string());
+        return Err(CommandError::Validation(
+            "That's a phi link — paste it in Fetch to view the content, not Upload".to_string(),
+        ));
     }
     let bytes = plaintext.as_bytes();
     if bytes.len() > MAX_PASTE_BYTES {
-        return Err(format!("Paste too large (max {} MiB)", MAX_PASTE_BYTES / 1024 / 1024));
+        return Err(CommandError::Validation(format!(
+            "Paste too large (max {} MiB)",
+            MAX_PASTE_BYTES / 1024 / 1024
+        )));
     }
 
     let key = key_store.key();
-    let encrypted = encrypt(bytes, key).map_err(|e| e.to_string())?;
+    let encrypted = encrypt(bytes, key).map_err(|e| CommandError::Encryption(e.to_string()))?;
 
     let id = uuid::Uuid::new_v4().to_string();
-    storage.put(&id, encrypted.as_bytes()).await.map_err(|e| e.to_string())?;
+    storage
+        .put(&id, encrypted.as_bytes())
+        .await
+        .map_err(|e| CommandError::Storage(e.to_string()))?;
 
+    info!(id = %id, size = bytes.len(), "paste uploaded");
     Ok(format!("phi://{}", id))
 }
 
@@ -113,45 +125,60 @@ async fn paste_fetch(
     id: String,
     storage: tauri::State<'_, Arc<dyn Storage>>,
     key_store: tauri::State<'_, Arc<KeyStore>>,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     let id = id.trim().trim_start_matches("phi://").split('/').next().unwrap_or("").trim();
     if id.is_empty() {
-        return Err("Invalid phi:// ID".to_string());
+        return Err(CommandError::Validation("Invalid phi:// ID".to_string()));
     }
     if uuid::Uuid::parse_str(id).is_err() {
-        return Err("Invalid UUID format".to_string());
+        return Err(CommandError::Validation("Invalid UUID format".to_string()));
     }
 
     let key = key_store.key();
-    let encrypted = storage.get(id).await.map_err(|e| e.to_string())?;
-    let encoded = String::from_utf8(encrypted).map_err(|e| e.to_string())?;
-    let decrypted = decrypt(&encoded, key).map_err(|e| e.to_string())?;
-    String::from_utf8(decrypted).map_err(|e| e.to_string())
+    let encrypted = storage
+        .get(id)
+        .await
+        .map_err(|e| CommandError::NotFound(format!("paste {id}: {e}")))?;
+    let encoded =
+        String::from_utf8(encrypted).map_err(|e| CommandError::Internal(e.to_string()))?;
+    let decrypted =
+        decrypt(&encoded, key).map_err(|e| CommandError::Encryption(e.to_string()))?;
+
+    debug!(id = %id, "paste fetched");
+    String::from_utf8(decrypted).map_err(|e| CommandError::Internal(e.to_string()))
 }
 
 #[tauri::command]
 async fn paste_list(
     storage: tauri::State<'_, Arc<dyn Storage>>,
-) -> Result<Vec<PasteEntry>, String> {
-    storage.list().await.map_err(|e| e.to_string())
+) -> Result<Vec<PasteEntry>, CommandError> {
+    storage
+        .list()
+        .await
+        .map_err(|e| CommandError::Storage(e.to_string()))
 }
 
 #[tauri::command]
 async fn paste_delete(
     id: String,
     storage: tauri::State<'_, Arc<dyn Storage>>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let id = id.trim().trim_start_matches("phi://").split('/').next().unwrap_or("").trim();
     if id.is_empty() {
-        return Err("Invalid ID".to_string());
+        return Err(CommandError::Validation("Invalid ID".to_string()));
     }
-    storage.delete(id).await.map_err(|e| e.to_string())
+    storage
+        .delete(id)
+        .await
+        .map_err(|e| CommandError::Storage(e.to_string()))?;
+    info!(id = %id, "paste deleted");
+    Ok(())
 }
 
 #[tauri::command]
 fn get_settings(
     key_store: tauri::State<'_, Arc<KeyStore>>,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, CommandError> {
     let storage_type = if std::env::var("SHIMMER_USE_FILE_STORAGE").ok().as_deref() == Some("1")
         || std::env::var("SHIMMER_S3_ENDPOINT").is_err()
     {
@@ -175,6 +202,16 @@ fn get_settings(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Structured logging: RUST_LOG env filter, pretty output for dev
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    info!("shimmer starting");
+
     let storage = tokio::runtime::Runtime::new()
         .expect("tokio runtime")
         .block_on(create_storage())
@@ -193,7 +230,7 @@ pub fn run() {
                 if trimmed.is_empty() {
                     return;
                 }
-                if text.as_bytes().len() <= MAX_PASTE_BYTES {
+                if text.len() <= MAX_PASTE_BYTES {
                     if let (Some(storage), Some(key_store)) = (
                         handle.try_state::<Arc<dyn Storage>>(),
                         handle.try_state::<Arc<KeyStore>>(),

@@ -3,6 +3,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use tracing::{info, warn};
 
 use crate::encryption::generate_key;
 
@@ -29,6 +30,7 @@ impl KeyStore {
                     if decoded.len() == KEY_LEN {
                         let mut key = [0u8; KEY_LEN];
                         key.copy_from_slice(&decoded);
+                        info!("encryption key loaded from SHIMMER_DEV_KEY");
                         return Self {
                             key: Arc::new(key),
                         };
@@ -45,6 +47,7 @@ impl KeyStore {
                     if bytes.len() == KEY_LEN {
                         let mut key = [0u8; KEY_LEN];
                         key.copy_from_slice(&bytes);
+                        info!("encryption key loaded from persisted file");
                         return Self {
                             key: Arc::new(key),
                         };
@@ -54,14 +57,15 @@ impl KeyStore {
         }
 
         // 3. Generate and persist
+        info!("generating new encryption key");
         let key = generate_key();
         if let Some(dir) = app_data_dir {
             if let Err(e) = std::fs::create_dir_all(dir) {
-                eprintln!("shimmer: could not create app data dir: {}", e);
+                warn!(error = %e, "could not create app data dir");
             } else {
                 let path = dir.join(KEY_FILE);
-                if let Err(e) = std::fs::write(&path, &key) {
-                    eprintln!("shimmer: could not persist key: {}", e);
+                if let Err(e) = std::fs::write(&path, key) {
+                    warn!(error = %e, "could not persist key");
                 }
             }
         }

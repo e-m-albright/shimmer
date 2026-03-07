@@ -1,13 +1,43 @@
-.DS_Store
-node_modules
+# Build outputs
 /build
 /.svelte-kit
 /package
+src-tauri/target
+
+# Dependencies
+node_modules
+
+# Environment & Secrets
 .env
 .env.*
 !.env.example
+
+# Dev storage
+/shimmer-dev-storage
+
+# OS generated
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing & Coverage
+*.profdata
+*.profraw
+/coverage/
+lcov.info
+
+# Logs
+*.log
+
+# Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
-/shimmer-dev-storage
-src-tauri/target
+
+# AI tools
 .claude/
