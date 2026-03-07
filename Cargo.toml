@@ -1,0 +1,88 @@
+[workspace]
+members = ["shimmer-core", "shimmer-server", "src-tauri"]
+resolver = "2"
+
+# =============================================================================
+# Workspace-wide lint policy
+# =============================================================================
+# Inherited by all members via `[lints] workspace = true`
+# These catch real bugs and enforce a baseline quality bar.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+# Correctness: things that are almost certainly bugs
+enum_glob_use = "deny"
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+unwrap_used = "deny"
+expect_used = "warn"
+
+# Style: things that make code harder to read
+needless_pass_by_value = "warn"
+cloned_instead_of_copied = "warn"
+redundant_closure_for_method_calls = "warn"
+manual_string_new = "warn"
+implicit_clone = "warn"
+
+# Performance: things that waste cycles
+large_futures = "warn"
+inefficient_to_string = "warn"
+
+# Pedantic (selectively enabled — not the whole group)
+doc_markdown = "warn"
+missing_errors_doc = "warn"
+wildcard_imports = "warn"
+
+# =============================================================================
+# Shared dependency versions — use `{ workspace = true }` in member Cargo.toml
+# =============================================================================
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Utilities
+uuid = { version = "1", features = ["v4"] }
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Encryption
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.22"
+hmac = "0.12"
+sha2 = "0.10"
+zeroize = { version = "1", features = ["derive"] }
+
+# Storage
+aws-config = "1"
+aws-sdk-s3 = "1"
+async-trait = "0.1"
+
+# =============================================================================
+# Profiles
+# =============================================================================
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"     # smaller binary, no unwinding overhead
+
+[profile.dev]
+opt-level = 0
+debug = true

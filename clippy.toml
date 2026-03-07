@@ -1,0 +1,11 @@
+# Clippy configuration — thresholds and project-specific rules
+# See: https://doc.rust-lang.org/clippy/lint_configuration.html
+
+# Flag functions with too many arguments (default: 7)
+too-many-arguments-threshold = 5
+
+# Flag types that are too large to pass by value (default: 256)
+trivial-copy-size-limit = 16
+
+# Flag future types larger than this threshold (prevents stack blowup in async)
+future-size-threshold = 16384

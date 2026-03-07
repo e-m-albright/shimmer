@@ -1,0 +1,17 @@
+# =============================================================================
+# rustfmt — Shimmer code style
+# =============================================================================
+# Uses stable-only options. Nightly features commented for reference.
+# Run: cargo fmt --all
+# Check: cargo fmt --all -- --check
+
+edition = "2021"
+max_width = 100
+tab_spaces = 4
+use_field_init_shorthand = true
+use_try_shorthand = true
+
+# Nightly-only (uncomment when stable):
+# imports_granularity = "Crate"
+# group_imports = "StdExternalCrate"
+# wrap_comments = true

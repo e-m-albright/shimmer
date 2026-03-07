@@ -5,6 +5,9 @@ description = "PHI sharing utility - secure, short-lived clipboard URLs"
 authors = ["you"]
 edition = "2021"
 
+[lints]
+workspace = true
+
 [lib]
 name = "shimmer_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -13,40 +16,24 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+shimmer-core = { path = "../shimmer-core" }
+
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-deep-link = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-uuid = { version = "1", features = ["v4"] }
-aes-gcm = "0.10"
-rand = "0.8"
-aws-config = "1"
-aws-sdk-s3 = "1"
-tokio = { version = "1", features = ["full"] }
-base64 = "0.22"
-async-trait = "0.1"
-hex = "0.4"
-chrono = "0.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+hex = { workspace = true }
+zeroize = { workspace = true }
 
 # Error handling
-thiserror = "1"
-anyhow = "1"
+thiserror = { workspace = true }
+anyhow = { workspace = true }
 
 # Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Optimized release builds
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-strip = true
-
-# Faster debug builds
-[profile.dev]
-opt-level = 0
-debug = true
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

@@ -1,0 +1,54 @@
+[package]
+name = "shimmer-server"
+version = "0.1.0"
+edition = "2021"
+description = "Shimmer API gateway — zero-knowledge PHI storage server"
+
+[lints]
+workspace = true
+
+[lib]
+name = "shimmer_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shimmer-server"
+path = "src/main.rs"
+
+[dependencies]
+shimmer-core = { path = "../shimmer-core" }
+
+# Web framework
+axum = { version = "0.8", features = ["json"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tokio = { workspace = true }
+
+# Auth
+jsonwebtoken = "9"
+
+# Config
+toml = "0.8"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# Validation
+validator = { version = "0.20", features = ["derive"] }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+# Integration tests
+axum-test = "19"
+tempfile = "3"

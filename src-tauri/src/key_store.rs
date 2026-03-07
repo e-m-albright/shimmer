@@ -1,19 +1,25 @@
 //! Persists encryption key across app restarts.
-//! Uses app data dir when SHIMMER_DEV_KEY is not set.
+//! Uses app data dir when `SHIMMER_DEV_KEY` is not set.
 
 use std::path::Path;
-use std::sync::Arc;
 use tracing::{info, warn};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::encryption::generate_key;
+use shimmer_core::encryption::generate_key;
 
 const KEY_FILE: &str = "key.bin";
 const KEY_LEN: usize = 32;
 
-/// Holds the encryption key. Persisted to app data dir when not using SHIMMER_DEV_KEY.
-#[derive(Clone)]
+/// Holds the encryption key. Persisted to app data dir when not using `SHIMMER_DEV_KEY`.
+///
+/// Always stored behind `Arc<KeyStore>` in Tauri state — the key itself is a plain
+/// array, no inner `Arc` needed since `KeyStore` is never cloned independently.
+///
+/// Implements [`ZeroizeOnDrop`] — the key is securely wiped from memory when the
+/// `KeyStore` is dropped, preventing key material from lingering on the heap.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct KeyStore {
-    key: Arc<[u8; KEY_LEN]>,
+    key: [u8; KEY_LEN],
 }
 
 impl KeyStore {
@@ -21,19 +27,15 @@ impl KeyStore {
         &self.key
     }
 
-    /// Load or create key: env SHIMMER_DEV_KEY > persisted file > generate new.
+    /// Load or create key: env `SHIMMER_DEV_KEY` > persisted file > generate new.
     pub fn load_or_create(app_data_dir: Option<&Path>) -> Self {
         // 1. Env override (explicit user config)
-        if let Ok(hex) = std::env::var("SHIMMER_DEV_KEY") {
-            if hex.len() == 64 {
-                if let Ok(decoded) = hex::decode(&hex) {
-                    if decoded.len() == KEY_LEN {
-                        let mut key = [0u8; KEY_LEN];
-                        key.copy_from_slice(&decoded);
+        if let Ok(hex_str) = std::env::var("SHIMMER_DEV_KEY") {
+            if hex_str.len() == 64 {
+                if let Ok(decoded) = hex::decode(&hex_str) {
+                    if let Ok(key) = <[u8; KEY_LEN]>::try_from(decoded.as_slice()) {
                         info!("encryption key loaded from SHIMMER_DEV_KEY");
-                        return Self {
-                            key: Arc::new(key),
-                        };
+                        return Self { key };
                     }
                 }
             }
@@ -44,13 +46,9 @@ impl KeyStore {
             let path = dir.join(KEY_FILE);
             if path.exists() {
                 if let Ok(bytes) = std::fs::read(&path) {
-                    if bytes.len() == KEY_LEN {
-                        let mut key = [0u8; KEY_LEN];
-                        key.copy_from_slice(&bytes);
+                    if let Ok(key) = <[u8; KEY_LEN]>::try_from(bytes.as_slice()) {
                         info!("encryption key loaded from persisted file");
-                        return Self {
-                            key: Arc::new(key),
-                        };
+                        return Self { key };
                     }
                 }
             }
@@ -70,8 +68,6 @@ impl KeyStore {
             }
         }
 
-        Self {
-            key: Arc::new(key),
-        }
+        Self { key }
     }
 }

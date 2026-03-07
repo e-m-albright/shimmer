@@ -1,0 +1,105 @@
+SHIMMER PROPRIETARY LICENSE
+
+Copyright (c) 2024-2026 Shimmer Authors. All rights reserved.
+
+TERMS AND CONDITIONS
+
+1. GRANT OF LICENSE
+
+   This software and associated documentation files (the "Software") are the
+   proprietary and confidential property of the copyright holders. No license,
+   right, or interest in the Software is granted to any person or entity except
+   as expressly set forth herein.
+
+2. RESTRICTIONS
+
+   You may NOT, without prior written authorization from the copyright holders:
+
+   a. Use, copy, modify, merge, publish, distribute, sublicense, or sell
+      copies of the Software;
+   b. Permit third parties to use the Software;
+   c. Reverse engineer, decompile, or disassemble the Software;
+   d. Remove or alter any proprietary notices, labels, or marks on the Software;
+   e. Use the Software to provide services to third parties (SaaS, hosting, etc.)
+      without a separate commercial agreement.
+
+3. DISCLAIMER OF WARRANTIES
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+
+   THE COPYRIGHT HOLDERS MAKE NO WARRANTY THAT THE SOFTWARE WILL BE
+   UNINTERRUPTED, ERROR-FREE, SECURE, OR FREE OF VIRUSES OR OTHER HARMFUL
+   COMPONENTS. THE COPYRIGHT HOLDERS DO NOT WARRANT THAT THE SOFTWARE WILL
+   MEET YOUR REQUIREMENTS OR THAT ANY DEFECTS WILL BE CORRECTED.
+
+   WITHOUT LIMITING THE FOREGOING, THE COPYRIGHT HOLDERS MAKE NO
+   REPRESENTATIONS OR WARRANTIES REGARDING THE SECURITY, ENCRYPTION,
+   OR DATA PROTECTION CAPABILITIES OF THE SOFTWARE. THE SOFTWARE'S
+   CRYPTOGRAPHIC FUNCTIONS ARE PROVIDED WITHOUT ANY GUARANTEE OF
+   CORRECTNESS, STRENGTH, OR SUITABILITY FOR PROTECTING SENSITIVE DATA,
+   INCLUDING BUT NOT LIMITED TO PROTECTED HEALTH INFORMATION (PHI),
+   PERSONALLY IDENTIFIABLE INFORMATION (PII), OR ANY OTHER REGULATED DATA.
+
+4. LIMITATION OF LIABILITY
+
+   IN NO EVENT SHALL THE COPYRIGHT HOLDERS, AUTHORS, OR CONTRIBUTORS BE
+   LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION
+   OF CONTRACT, TORT, NEGLIGENCE, STRICT LIABILITY, OR OTHERWISE, ARISING
+   FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE, INCLUDING BUT NOT LIMITED TO:
+
+   a. ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, CONSEQUENTIAL,
+      OR PUNITIVE DAMAGES;
+   b. ANY LOSS OF PROFITS, DATA, BUSINESS, GOODWILL, OR REVENUE;
+   c. ANY DATA BREACHES, SECURITY INCIDENTS, UNAUTHORIZED ACCESS TO OR
+      DISCLOSURE OF DATA (INCLUDING PHI, PII, OR OTHER SENSITIVE DATA);
+   d. ANY FAILURE OF ENCRYPTION, KEY MANAGEMENT, OR OTHER SECURITY MEASURES;
+   e. ANY REGULATORY FINES, PENALTIES, OR COMPLIANCE COSTS (INCLUDING
+      BUT NOT LIMITED TO HIPAA, GDPR, CCPA, OR OTHER DATA PROTECTION
+      REGULATIONS);
+   f. ANY COSTS OF PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+   g. ANY INTERRUPTION OF USE OR LOSS OR CORRUPTION OF DATA;
+
+   REGARDLESS OF WHETHER SUCH DAMAGES WERE FORESEEABLE AND WHETHER THE
+   COPYRIGHT HOLDERS WERE ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+   THIS LIMITATION APPLIES EVEN IF A REMEDY SET FORTH HEREIN IS FOUND TO
+   HAVE FAILED OF ITS ESSENTIAL PURPOSE.
+
+5. INDEMNIFICATION
+
+   You agree to indemnify, defend, and hold harmless the copyright holders,
+   their officers, directors, employees, agents, and affiliates from and
+   against any and all claims, damages, losses, liabilities, costs, and
+   expenses (including reasonable attorneys' fees) arising out of or
+   relating to your use of the Software, including any data breach, security
+   incident, or regulatory action.
+
+6. NO COMPLIANCE GUARANTEE
+
+   The Software does not guarantee compliance with any law, regulation, or
+   standard, including but not limited to HIPAA, HITECH, GDPR, CCPA, SOC 2,
+   or any other data protection framework. Users are solely responsible for
+   determining whether their use of the Software meets applicable legal and
+   regulatory requirements.
+
+7. GOVERNING LAW
+
+   This License shall be governed by and construed in accordance with the
+   laws of the State of Delaware, United States, without regard to its
+   conflict of law provisions.
+
+8. SEVERABILITY
+
+   If any provision of this License is held to be unenforceable, such
+   provision shall be reformed only to the extent necessary to make it
+   enforceable, and the remaining provisions shall continue in full force
+   and effect.
+
+9. ENTIRE AGREEMENT
+
+   This License constitutes the entire agreement between the parties with
+   respect to the Software and supersedes all prior or contemporaneous
+   understandings regarding such subject matter.

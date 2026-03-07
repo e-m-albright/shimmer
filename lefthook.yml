@@ -2,6 +2,7 @@
 # Lefthook Configuration
 # =============================================================================
 # Git hooks powered by Lefthook (https://github.com/evilmartians/lefthook)
+# Skip hooks: LEFTHOOK=0 git commit ...
 # =============================================================================
 
 parallel: true
@@ -9,15 +10,15 @@ parallel: true
 pre-commit:
   parallel: true
   commands:
-    # Check Rust formatting
+    # Check Rust formatting (all workspace crates)
     fmt:
-      glob: "src-tauri/**/*.rs"
-      run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      glob: "{shimmer-core,shimmer-server,src-tauri}/**/*.rs"
+      run: cargo fmt --all -- --check
 
-    # Lint Rust
+    # Lint all Rust crates
     clippy:
-      glob: "src-tauri/**/*.rs"
-      run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+      glob: "{shimmer-core,shimmer-server,src-tauri}/**/*.rs"
+      run: cargo clippy --workspace -- -D warnings
 
     # Check frontend types
     ui-check:
@@ -27,11 +28,10 @@ pre-commit:
 pre-push:
   parallel: false
   commands:
-    # Run Rust tests
+    # Run all Rust tests
     test:
-      run: cargo test --manifest-path src-tauri/Cargo.toml
+      run: cargo test --workspace
 
-# Skip hooks with LEFTHOOK=0 environment variable
 skip_output:
   - meta
   - summary

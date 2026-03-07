@@ -1,0 +1,54 @@
+# =============================================================================
+# cargo-deny — Security and license policy for Shimmer
+# =============================================================================
+# Run: cargo deny check
+# Install: cargo install cargo-deny
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+# Deny any crate with a known security vulnerability
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "warn"
+notice = "warn"
+
+[licenses]
+# Allow only these licenses
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "OpenSSL",
+    "BSL-1.0",
+    "CC0-1.0",
+]
+# We use dual MIT/Apache-2.0 for our own crates
+unlicensed = "deny"
+copyleft = "deny"
+default = "deny"
+
+# Ring uses a custom license that is functionally ISC
+[[licenses.clarify]]
+name = "ring"
+expression = "ISC AND MIT AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[bans]
+# Deny multiple versions of the same crate (reduces binary size)
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+# Allow specific duplicates that are unavoidable in the ecosystem
+skip = []
+
+[sources]
+# Only allow crates from crates.io (no git deps in production)
+unknown-registry = "deny"
+unknown-git = "warn"
+allow-git = []

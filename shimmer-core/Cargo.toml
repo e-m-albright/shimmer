@@ -1,0 +1,42 @@
+[package]
+name = "shimmer-core"
+version = "0.1.0"
+edition = "2021"
+description = "Shared library: encryption, storage trait, error types"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Encryption
+aes-gcm = { workspace = true }
+rand = { workspace = true }
+base64 = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+zeroize = { workspace = true }
+
+# Storage
+aws-config = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+hex = { workspace = true }
+chrono = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"
