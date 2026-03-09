@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use shimmer_core::storage::{FileStorage, S3Storage, Storage};
-use shimmer_server::{build_router, config, AppState};
+use shimmer_server::{build_router, config, db::Database, AppState};
 use tracing::info;
 
 #[tokio::main]
@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
     // Bind address extracted before config is moved into AppState
     let addr = format!("{}:{}", config.host, config.port);
 
-    // Storage backend
+    // Storage backend (blob storage for ciphertext)
     let storage: Box<dyn Storage> = match config.storage_backend.as_str() {
         "s3" => {
             let s3 = S3Storage::new(
@@ -48,11 +48,35 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Metadata database
+    let db_path = config
+        .db_path
+        .as_deref()
+        .unwrap_or("./shimmer-metadata.db");
+    let db = Database::open(std::path::Path::new(db_path))?;
+
+    // Auto-create the dev org if configured and not already present
+    if let Some(ref org_id) = config.org_id {
+        if db.get_org(org_id)?.is_none() {
+            let org_name = config
+                .org_name
+                .as_deref()
+                .unwrap_or("Development Org");
+            db.create_org(&shimmer_server::db::OrgRecord {
+                id: org_id.clone(),
+                name: org_name.to_string(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            })?;
+            info!(org_id, org_name, "auto-created development org");
+        }
+    }
+
     let jwt_secret =
         std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-in-production".into());
 
     let state = Arc::new(AppState {
         storage,
+        db,
         config,
         jwt_secret,
     });

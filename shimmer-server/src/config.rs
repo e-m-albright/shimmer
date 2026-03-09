@@ -23,6 +23,10 @@ pub struct ServerConfig {
     #[serde(default)]
     pub file_storage_path: Option<String>,
 
+    // Database
+    #[serde(default)]
+    pub db_path: Option<String>,
+
     // Org
     #[serde(default)]
     pub org_id: Option<String>,
@@ -71,6 +75,7 @@ impl ServerConfig {
                     .unwrap_or_else(|_| default_s3_bucket()),
                 s3_region: std::env::var("AWS_REGION").ok(),
                 file_storage_path: std::env::var("SHIMMER_STORAGE_PATH").ok(),
+                db_path: std::env::var("SHIMMER_DB_PATH").ok(),
                 org_id: std::env::var("SHIMMER_ORG_ID").ok(),
                 org_name: std::env::var("SHIMMER_ORG_NAME").ok(),
             }

@@ -15,8 +15,8 @@ pub enum CommandError {
     #[error("validation error: {0}")]
     Validation(String),
 
-    #[error("storage error: {0}")]
-    Storage(String),
+    #[error("server error: {0}")]
+    Server(String),
 
     #[error("encryption error: {0}")]
     Encryption(String),

@@ -15,6 +15,10 @@ path = "src/lib.rs"
 name = "shimmer-server"
 path = "src/main.rs"
 
+[[bin]]
+name = "gen-token"
+path = "src/bin/gen_token.rs"
+
 [dependencies]
 shimmer-core = { path = "../shimmer-core" }
 
@@ -39,6 +43,12 @@ chrono = { workspace = true }
 
 # Validation
 validator = { version = "0.20", features = ["derive"] }
+
+# Database (metadata — ciphertext stays in blob storage)
+rusqlite = { workspace = true }
+
+# Multipart file upload
+axum-extra = { version = "0.10", features = ["multipart"] }
 
 # Error handling
 thiserror = { workspace = true }

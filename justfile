@@ -12,21 +12,30 @@ default:
 # Development
 # -----------------------------------------------------------------------------
 
-# Run Shimmer desktop app (file storage by default — no setup needed)
+# Run Shimmer desktop app against local shimmer-server (requires `just dev-server` in another terminal)
+# Generate a token first: export SHIMMER_JWT=$(just gen-token)
 dev:
     npm run tauri dev
 
-# Run Shimmer with MinIO (requires `just up` first)
+# Run shimmer-server + Tauri app together (file storage). Token is auto-set.
+dev-full:
+    #!/usr/bin/env bash
+    set -e
+    export SHIMMER_JWT=$(cargo run -q -p shimmer-server --bin gen-token 2>/dev/null)
+    export SHIMMER_SERVER_URL=http://localhost:8443
+    cargo run -p shimmer-server --bin shimmer-server &
+    SERVER_PID=$!
+    sleep 1
+    trap "kill $SERVER_PID 2>/dev/null" EXIT
+    npm run tauri dev
+
+# Run Shimmer desktop app against MinIO-backed server (requires `just up` + `just dev-server-s3`)
 dev-s3:
-    SHIMMER_S3_ENDPOINT=http://localhost:9000 \
-    SHIMMER_S3_BUCKET=shimmer \
-    AWS_ACCESS_KEY_ID=minioadmin \
-    AWS_SECRET_ACCESS_KEY=minioadmin \
     npm run tauri dev
 
 # Run shimmer-server locally (file storage)
 dev-server:
-    cargo run -p shimmer-server
+    cargo run -p shimmer-server --bin shimmer-server
 
 # Run shimmer-server with MinIO (requires `just up` first)
 dev-server-s3:
@@ -34,7 +43,7 @@ dev-server-s3:
     SHIMMER_S3_BUCKET=shimmer \
     AWS_ACCESS_KEY_ID=minioadmin \
     AWS_SECRET_ACCESS_KEY=minioadmin \
-    cargo run -p shimmer-server
+    cargo run -p shimmer-server --bin shimmer-server
 
 # Start frontend only (faster, no Rust rebuild)
 dev-ui:
@@ -141,7 +150,7 @@ test-integration:
 install:
     npm install
     @echo "Installing Rust dev tools..."
-    @command -v cargo-nextest >/dev/null 2>&1 || cargo install cargo-nextest
+    @command -v cargo-nextest >/dev/null 2>&1 || cargo install --locked cargo-nextest
     @command -v cargo-deny    >/dev/null 2>&1 || cargo install cargo-deny
     @command -v cargo-audit   >/dev/null 2>&1 || cargo install cargo-audit
 
@@ -235,3 +244,8 @@ workspace:
 # Generate a dev encryption key (hex-encoded, for SHIMMER_DEV_KEY)
 gen-key:
     @openssl rand -hex 32
+
+# Generate a dev JWT for SHIMMER_JWT (signed with the dev secret)
+# Usage: export SHIMMER_JWT=$(just gen-token)
+gen-token:
+    @cargo run -q -p shimmer-server --bin gen-token 2>/dev/null
