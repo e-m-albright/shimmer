@@ -14,6 +14,7 @@ node_modules
 
 # Dev storage
 /shimmer-dev-storage
+/shimmer-storage
 
 # SQLite runtime files
 *.db
