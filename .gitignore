@@ -15,6 +15,11 @@ node_modules
 # Dev storage
 /shimmer-dev-storage
 
+# SQLite runtime files
+*.db
+*.db-shm
+*.db-wal
+
 # OS generated
 .DS_Store
 Thumbs.db
