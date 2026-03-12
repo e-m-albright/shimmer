@@ -1,184 +1,76 @@
-# AGENTS.md — Shimmer
+# AGENTS.md
 
-Cross-platform instructions for AI coding agents.
-
----
-
-## Quick Reference
-
-```yaml
-Language:    Rust (stable, edition 2021)
-Workspace:   Cargo workspace (3 crates)
-Framework:   Tauri v2 (tray-only desktop app)
-Server:      Axum 0.8 (API gateway)
-Frontend:    SvelteKit + Svelte 5
-Async:       Tokio
-Errors:      thiserror (typed) + anyhow (internal propagation)
-Logging:     tracing + tracing-subscriber (JSON in prod)
-Validation:  validator (derive-based field validation)
-Testing:     #[test], #[tokio::test], nextest, axum-test, proptest, insta
-Linting:     clippy (workspace-wide deny policy via [lints])
-Formatter:   rustfmt (rustfmt.toml)
-Git Hooks:   Lefthook
-Tasks:       Just
-Security:    cargo-deny (licenses, advisories, duplicates)
-```
+Read all `.ai/rules/*.mdc` files for coding conventions, stack decisions,
+and process rules. Cursor users: rules are also in `.cursor/rules/`.
 
 ---
 
-## Workspace Structure
+## Research & Library Usage
 
-```
-shimmer/
-├── Cargo.toml                 # Workspace root (shared deps, [lints], profiles)
-├── deny.toml                  # cargo-deny policy
-├── rustfmt.toml               # Formatting rules
-├── justfile                   # Task runner
-├── lefthook.yml               # Git hooks
-├── .env.example               # Env var documentation
-│
-├── shimmer-core/              # Shared library (encryption, storage, errors)
-│   └── src/
-│       ├── lib.rs             # Exports + constants (MAX_PASTE_BYTES, KEY_LEN)
-│       ├── encryption.rs      # Envelope encryption (AES-256-GCM) + blind index SSE
-│       ├── error.rs           # CryptoError + StorageError (thiserror)
-│       └── storage.rs         # Storage trait + S3/File impls
-│
-├── shimmer-server/            # Axum API gateway (zero-knowledge)
-│   ├── src/
-│   │   ├── lib.rs             # AppState + build_router() for testability
-│   │   ├── main.rs            # Entrypoint (logging, config, storage init)
-│   │   ├── auth.rs            # JWT claims + FromRequestParts extractor
-│   │   ├── config.rs          # TOML config + env var overlay
-│   │   └── routes/
-│   │       ├── mod.rs         # Route tree
-│   │       └── paste.rs       # CRUD handlers + validator
-│   └── tests/
-│       └── api_test.rs        # Integration tests (axum-test + tempdir)
-│
-├── src-tauri/                 # Tauri desktop client
-│   └── src/
-│       ├── main.rs            # Entry point
-│       ├── lib.rs             # Commands, tray, hotkey handler
-│       ├── error.rs           # CommandError (thiserror + Serialize for IPC)
-│       └── key_store.rs       # KEK persistence (OS keychain / file fallback)
-│
-└── src/                       # SvelteKit frontend
-    └── routes/+page.svelte    # Main UI (tabs: Paste, Browse, Settings)
-```
-
----
-
-## Commands
-
-```bash
-# Development
-just dev                   # Run desktop app (file storage, no setup)
-just dev-s3                # Run with MinIO (requires `just up`)
-just dev-server            # Run API server locally
-just dev-ui                # Frontend only (no Rust rebuild)
-
-# Quality
-just check                 # fmt-check + clippy + test (pre-commit gate)
-just ci                    # check + typecheck (full CI pipeline)
-just clippy                # cargo clippy --workspace -- -D warnings
-just fmt                   # cargo fmt --all
-just check-fast            # cargo check --workspace (fastest feedback)
-
-# Testing
-just test                  # cargo nextest run (or cargo test)
-just test-v                # With output (--nocapture)
-just test-core             # shimmer-core only
-just test-server           # shimmer-server only
-just test-integration      # Integration tests only
-just test-filter <pattern> # Run matching tests
-
-# Security
-just audit                 # cargo audit (CVE scan)
-just deny                  # cargo deny check (licenses + advisories)
-
-# Infrastructure
-just up                    # Start MinIO
-just down                  # Stop MinIO
-just gen-key               # Generate a 256-bit hex key
-```
-
----
-
-## Error Handling
-
-**Client (src-tauri)**: Commands use typed `CommandError` enum:
-
-```rust
-#[tauri::command]
-async fn my_command(...) -> Result<T, CommandError> {
-    // Variants: NotFound, Validation, Storage, Encryption, Internal
-}
-```
-
-**Core (shimmer-core)**: Domain errors `CryptoError` and `StorageError` (thiserror).
-
-**Server (shimmer-server)**: Returns `(StatusCode, String)` tuples. Validates requests with `validator`.
-
-**Rules**:
-- Command errors must impl `Serialize` — never use `String` as the error type.
-- Use `thiserror` for typed errors, `anyhow` for internal propagation.
-- No `.unwrap()` in commands — return appropriate error variant.
-- No `expect()` outside of startup/setup code.
-
----
-
-## Logging
-
-Use `tracing` macros everywhere. Never use `println!` or `eprintln!`.
-
-```rust
-use tracing::{info, warn, error, debug};
-
-info!(id = %id, size = bytes.len(), "paste uploaded");
-warn!(error = %e, "could not persist key");
-error!(error = ?err, "storage operation failed");
-```
-
-- Dev: human-readable output (default)
-- Prod: `LOG_FORMAT=json` for machine-parseable structured JSON
-- Filter: `RUST_LOG` env var (default: `info`)
-
----
-
-## Serde Conventions
-
-API request/response types use:
-- `#[serde(rename_all = "camelCase")]` — consistent JSON naming
-- `#[serde(deny_unknown_fields)]` — reject unexpected fields on requests
-- `#[serde(default)]` — optional fields with sensible defaults
-- `validator` derive for field-level validation (length, range, custom)
+**Check the current date before researching.** Your training data may be stale.
+When using a library, search for latest docs first. Verify you're using
+the current API, not a deprecated one.
 
 ---
 
 ## Critical Rules
 
 ### Always
-
-- Use workspace dependencies (`{ workspace = true }`) for shared crates.
-- Command errors must `impl Serialize` — use typed `CommandError`, not strings.
-- Use `tracing` for all logging.
-- Validate API inputs with `validator` before processing.
-- Keep heavy async work in Rust; the frontend only calls `invoke()`.
-- Run `just check` before committing.
+- Type-annotate all function signatures
+- Validate at system boundaries (user input, external APIs, CLI args)
+- Use structured logging (`structlog`/`pino`) — never `print()` or `console.log()`
+- Run `just check` before claiming work is complete
 
 ### Never
-
-- Use `String` as the error type in Tauri commands.
-- Use `std::thread::sleep` in async context — use `tokio::time::sleep`.
-- Use `Mutex::lock()` across `.await` — use `tokio::sync::Mutex`.
-- Use `println!` / `eprintln!` — use `tracing` macros.
-- Put secrets in `tauri.conf.json` — it ships with the binary.
-- Use `.unwrap()` / `.expect()` in library or handler code.
+- Commit secrets, `.env` files, or credentials
+- Add a dependency for something achievable in <20 lines
+- Skip tests when adding new logic or fixing bugs
+- Use `Any` or untyped interfaces without explicit justification
 
 ### Ask First
+- Adding new dependencies or changing the stack
+- Schema changes or data migrations
+- Changing auth flows, permissions, or security boundaries
+- Architectural decisions that affect multiple components
 
-- Adding new Tauri plugins (require capability permission entries).
-- Changing the app identifier — affects OS-level data paths.
-- Modifying the encryption scheme — breaks existing encrypted pastes.
-- Adding new workspace crates.
+---
+
+## Project Context
+
+<!-- Fill in below. For deeper domain knowledge, create docs/DOMAIN.md -->
+
+### Overview
+<!-- What does this project do? Who is it for? -->
+
+### Goals
+- [ ] Goal 1
+
+### Non-Goals
+- Not building X
+
+### Technical Constraints
+- Deployment target: [platform]
+
+### Domain Context
+<!-- Key terms, business rules, entities.
+     If this section grows beyond a few bullets, move it to docs/DOMAIN.md
+     and reference it here. See the DOMAIN.md guide below. -->
+
+---
+
+## Building Domain Knowledge
+
+As you work on this project, you'll learn domain-specific context that
+future agents (and your future self) will need. Capture it:
+
+1. **Start here** — fill in the Project Context section above with basics
+2. **Grow into `docs/DOMAIN.md`** — when domain context outgrows a few bullets,
+   create a dedicated file covering:
+   - **Glossary** — key terms and their precise meanings in this domain
+   - **Entities & relationships** — the core data model in plain language
+   - **Business rules** — constraints that aren't obvious from the code
+   - **User journeys** — the 2-3 critical paths through the system
+3. **Keep it alive** — update domain docs when you learn something new.
+   Stale domain docs are worse than none.
+
+This is project-owned — adapt the structure to what your domain actually needs.
