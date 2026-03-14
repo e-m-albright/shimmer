@@ -8,6 +8,7 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod routes;
+pub mod services;
 
 use std::fmt;
 use std::sync::Arc;
