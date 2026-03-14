@@ -62,6 +62,10 @@ axum-extra = { version = "0.10", features = ["multipart"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 
+# TUI
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+
 # Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

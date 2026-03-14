@@ -9,6 +9,7 @@ pub mod config;
 pub mod db;
 pub mod routes;
 pub mod services;
+pub mod tui;
 
 use std::fmt;
 use std::sync::Arc;

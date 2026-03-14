@@ -6,7 +6,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use clap::{Parser, Subcommand};
 use rand::RngCore;
 use shimmer_core::storage::{FileStorage, S3Storage, Storage};
-use shimmer_server::{build_router, config, db, db::Database, AppState};
+use shimmer_server::{build_router, config, db, db::Database, services, tui, AppState};
 use tracing::{error, info};
 
 // ---------------------------------------------------------------------------
@@ -153,12 +153,79 @@ async fn main() {
 
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => run_server(cli.config.as_deref()).await,
-        Command::Setup => {
-            eprintln!("Setup wizard not yet implemented");
-            std::process::exit(1);
-        }
+        Command::Setup => run_setup(),
         Command::Admin { action } => run_admin(cli.config.as_deref(), action),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Setup wizard
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::expect_used)]
+fn run_setup() {
+    let setup_cfg =
+        tui::setup::run_setup_wizard().expect("failed to initialise terminal for setup wizard");
+
+    let Some(setup_cfg) = setup_cfg else {
+        eprintln!("Setup cancelled.");
+        std::process::exit(0);
+    };
+
+    // Generate a random JWT secret
+    let jwt_secret = tui::setup::generate_jwt_secret();
+
+    // Write shimmer.toml
+    tui::setup::write_config_file(&setup_cfg, &jwt_secret).expect("failed to write shimmer.toml");
+
+    // Initialise the database and create the org
+    let db = Database::open(std::path::Path::new(&setup_cfg.db_path))
+        .expect("failed to open/create database");
+
+    let org_id = format!("org_{}", uuid::Uuid::new_v4());
+    db.create_org(&db::OrgRecord {
+        id: org_id.clone(),
+        name: setup_cfg.org_name.clone(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    })
+    .expect("failed to create org in database");
+
+    // Register the admin user via the auth service
+    services::auth::register(
+        &db,
+        &services::auth::RegisterInput {
+            email: setup_cfg.admin_email.clone(),
+            password: setup_cfg.admin_password.clone(),
+            org_id: org_id.clone(),
+            role: "admin".into(),
+            name: "Admin".into(),
+        },
+        &jwt_secret,
+    )
+    .expect("failed to create admin user");
+
+    // Persist the org.id into shimmer.toml so `serve` can find it
+    // Append org.id line — simplest approach to avoid re-parsing
+    let existing = std::fs::read_to_string("shimmer.toml").expect("failed to re-read shimmer.toml");
+    let updated = existing.replace(
+        &format!("[org]\nname = \"{}\"", setup_cfg.org_name),
+        &format!(
+            "[org]\nname = \"{}\"\nid = \"{}\"",
+            setup_cfg.org_name, org_id
+        ),
+    );
+    std::fs::write("shimmer.toml", &updated).expect("failed to update shimmer.toml with org id");
+
+    println!();
+    println!("Setup complete!");
+    println!();
+    println!("  Config written to: shimmer.toml (permissions: 0600)");
+    println!("  Organisation:      {} ({})", setup_cfg.org_name, org_id);
+    println!("  Admin email:       {}", setup_cfg.admin_email);
+    println!();
+    println!("Next steps:");
+    println!("  shimmer-server serve");
+    println!();
 }
 
 // ---------------------------------------------------------------------------
