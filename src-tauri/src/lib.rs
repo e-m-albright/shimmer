@@ -16,14 +16,15 @@ use tauri::{
     Emitter, Manager,
 };
 use tauri_plugin_clipboard_manager::ClipboardExt;
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use client::{PasteSummary, ShimmerClient, UploadOptions};
 use error::CommandError;
 use key_store::KeyStore;
 use shimmer_core::encryption::{
-    blind_index_token, decrypt_envelope, derive_search_key, encrypt_envelope,
-    extract_blind_tokens, EnvelopePayload,
+    blind_index_token, decrypt_envelope, derive_search_key, encrypt_envelope, extract_blind_tokens,
+    EnvelopePayload,
 };
 
 const TRAY_ID: &str = "shimmer-tray";
@@ -132,8 +133,8 @@ fn parse_paste_id(raw: &str) -> Result<&str, CommandError> {
 #[tauri::command]
 async fn paste_upload(
     plaintext: String,
-    client: tauri::State<'_, Arc<ShimmerClient>>,
-    key_store: tauri::State<'_, Arc<KeyStore>>,
+    client: tauri::State<'_, Arc<RwLock<ShimmerClient>>>,
+    key_store: tauri::State<'_, Arc<RwLock<KeyStore>>>,
 ) -> Result<String, CommandError> {
     if plaintext.trim().starts_with("phi://") {
         return Err(CommandError::Validation(
@@ -148,14 +149,14 @@ async fn paste_upload(
         )));
     }
 
-    let kek = key_store.key();
+    let kek = *key_store.read().await.key();
 
     // Generate blind index search tokens from plaintext content
-    let search_key = derive_search_key(kek);
+    let search_key = derive_search_key(&kek);
     let search_tokens = extract_blind_tokens(&plaintext, &search_key);
 
     // Encrypt locally — ciphertext is JSON-serialized EnvelopePayload
-    let envelope = encrypt_envelope(bytes, kek, "tauri-client")
+    let envelope = encrypt_envelope(bytes, &kek, "tauri-client")
         .map_err(|e| CommandError::Encryption(e.to_string()))?;
     let ciphertext_json =
         serde_json::to_string(&envelope).map_err(|e| CommandError::Internal(e.to_string()))?;
@@ -167,7 +168,7 @@ async fn paste_upload(
         ..UploadOptions::default()
     };
 
-    let id = client.upload(&ciphertext_json, &opts).await?;
+    let id = client.read().await.upload(&ciphertext_json, &opts).await?;
 
     info!(paste_id = %id, size = bytes.len(), "paste uploaded via server");
     Ok(format!("phi://{id}"))
@@ -177,14 +178,14 @@ async fn paste_upload(
 #[tauri::command]
 async fn file_upload(
     file_path: String,
-    client: tauri::State<'_, Arc<ShimmerClient>>,
-    key_store: tauri::State<'_, Arc<KeyStore>>,
+    client: tauri::State<'_, Arc<RwLock<ShimmerClient>>>,
+    key_store: tauri::State<'_, Arc<RwLock<KeyStore>>>,
 ) -> Result<String, CommandError> {
     let path = std::path::Path::new(&file_path);
 
     // Read file bytes
-    let bytes = std::fs::read(path)
-        .map_err(|e| CommandError::Internal(format!("read file: {e}")))?;
+    let bytes =
+        std::fs::read(path).map_err(|e| CommandError::Internal(format!("read file: {e}")))?;
 
     if bytes.len() > shimmer_core::MAX_FILE_BYTES {
         return Err(CommandError::Validation(format!(
@@ -193,8 +194,8 @@ async fn file_upload(
         )));
     }
 
-    let kek = key_store.key();
-    let search_key = derive_search_key(kek);
+    let kek = *key_store.read().await.key();
+    let search_key = derive_search_key(&kek);
 
     // Detect content type from extension
     let filename = path
@@ -211,13 +212,13 @@ async fn file_upload(
         .collect();
 
     // Encrypt the filename (it could contain PHI)
-    let filename_envelope = encrypt_envelope(filename.as_bytes(), kek, "tauri-client")
+    let filename_envelope = encrypt_envelope(filename.as_bytes(), &kek, "tauri-client")
         .map_err(|e| CommandError::Encryption(e.to_string()))?;
     let filename_encrypted = serde_json::to_string(&filename_envelope)
         .map_err(|e| CommandError::Internal(e.to_string()))?;
 
     // Encrypt the file content
-    let envelope = encrypt_envelope(&bytes, kek, "tauri-client")
+    let envelope = encrypt_envelope(&bytes, &kek, "tauri-client")
         .map_err(|e| CommandError::Encryption(e.to_string()))?;
     let ciphertext_json =
         serde_json::to_string(&envelope).map_err(|e| CommandError::Internal(e.to_string()))?;
@@ -230,7 +231,7 @@ async fn file_upload(
         ..UploadOptions::default()
     };
 
-    let id = client.upload(&ciphertext_json, &opts).await?;
+    let id = client.read().await.upload(&ciphertext_json, &opts).await?;
 
     info!(paste_id = %id, file = %filename, size = bytes.len(), "file uploaded via server");
     Ok(format!("phi://{id}"))
@@ -243,19 +244,19 @@ async fn file_upload(
 #[tauri::command]
 async fn paste_fetch(
     id: String,
-    client: tauri::State<'_, Arc<ShimmerClient>>,
-    key_store: tauri::State<'_, Arc<KeyStore>>,
+    client: tauri::State<'_, Arc<RwLock<ShimmerClient>>>,
+    key_store: tauri::State<'_, Arc<RwLock<KeyStore>>>,
 ) -> Result<String, CommandError> {
     let id = parse_paste_id(&id)?;
 
-    let ciphertext_bytes = client.fetch(id).await?;
+    let ciphertext_bytes = client.read().await.fetch(id).await?;
 
     let envelope: EnvelopePayload = serde_json::from_slice(&ciphertext_bytes)
         .map_err(|e| CommandError::Internal(format!("envelope parse: {e}")))?;
 
-    let kek = key_store.key();
+    let kek = *key_store.read().await.key();
     let plaintext =
-        decrypt_envelope(&envelope, kek).map_err(|e| CommandError::Encryption(e.to_string()))?;
+        decrypt_envelope(&envelope, &kek).map_err(|e| CommandError::Encryption(e.to_string()))?;
 
     debug!(paste_id = %id, "paste decrypted");
 
@@ -273,18 +274,18 @@ async fn paste_fetch(
 #[tauri::command]
 async fn paste_fetch_bytes(
     id: String,
-    client: tauri::State<'_, Arc<ShimmerClient>>,
-    key_store: tauri::State<'_, Arc<KeyStore>>,
+    client: tauri::State<'_, Arc<RwLock<ShimmerClient>>>,
+    key_store: tauri::State<'_, Arc<RwLock<KeyStore>>>,
 ) -> Result<Vec<u8>, CommandError> {
     let id = parse_paste_id(&id)?;
 
-    let ciphertext_bytes = client.fetch(id).await?;
+    let ciphertext_bytes = client.read().await.fetch(id).await?;
     let envelope: EnvelopePayload = serde_json::from_slice(&ciphertext_bytes)
         .map_err(|e| CommandError::Internal(format!("envelope parse: {e}")))?;
 
-    let kek = key_store.key();
+    let kek = *key_store.read().await.key();
     let plaintext =
-        decrypt_envelope(&envelope, kek).map_err(|e| CommandError::Encryption(e.to_string()))?;
+        decrypt_envelope(&envelope, &kek).map_err(|e| CommandError::Encryption(e.to_string()))?;
 
     debug!(paste_id = %id, size = plaintext.len(), "file decrypted");
     Ok(plaintext)
@@ -293,24 +294,24 @@ async fn paste_fetch_bytes(
 /// List pastes visible to the current user (org + own private).
 #[tauri::command]
 async fn paste_list(
-    client: tauri::State<'_, Arc<ShimmerClient>>,
+    client: tauri::State<'_, Arc<RwLock<ShimmerClient>>>,
 ) -> Result<Vec<PasteSummary>, CommandError> {
-    client.list(None).await
+    client.read().await.list(None).await
 }
 
 /// Search pastes by search terms (converted to blind index tokens).
 #[tauri::command]
 async fn paste_search(
     query: String,
-    client: tauri::State<'_, Arc<ShimmerClient>>,
-    key_store: tauri::State<'_, Arc<KeyStore>>,
+    client: tauri::State<'_, Arc<RwLock<ShimmerClient>>>,
+    key_store: tauri::State<'_, Arc<RwLock<KeyStore>>>,
 ) -> Result<Vec<PasteSummary>, CommandError> {
     if query.trim().is_empty() {
-        return client.list(None).await;
+        return client.read().await.list(None).await;
     }
 
-    let kek = key_store.key();
-    let search_key = derive_search_key(kek);
+    let kek = *key_store.read().await.key();
+    let search_key = derive_search_key(&kek);
 
     // Convert search terms to blind index tokens
     let tokens: Vec<String> = query
@@ -320,20 +321,20 @@ async fn paste_search(
         .collect();
 
     if tokens.is_empty() {
-        return client.list(None).await;
+        return client.read().await.list(None).await;
     }
 
-    client.list(Some(&tokens)).await
+    client.read().await.list(Some(&tokens)).await
 }
 
 /// Delete a paste by ID.
 #[tauri::command]
 async fn paste_delete(
     id: String,
-    client: tauri::State<'_, Arc<ShimmerClient>>,
+    client: tauri::State<'_, Arc<RwLock<ShimmerClient>>>,
 ) -> Result<(), CommandError> {
     let id = parse_paste_id(&id)?;
-    client.delete(id).await?;
+    client.read().await.delete(id).await?;
     info!(paste_id = %id, "paste deleted via server");
     Ok(())
 }
@@ -342,11 +343,16 @@ async fn paste_delete(
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractors must be by-value
 fn get_settings(
-    key_store: tauri::State<'_, Arc<KeyStore>>,
+    key_store: tauri::State<'_, Arc<RwLock<KeyStore>>>,
 ) -> Result<serde_json::Value, CommandError> {
     let server_url =
         std::env::var("SHIMMER_SERVER_URL").unwrap_or_else(|_| "http://localhost:8443".into());
-    let key_hex = hex::encode(&key_store.key()[..4]);
+    // key_store is behind RwLock; for settings we only need the hex fingerprint
+    // We use try_read() here — this is a sync fn so we can't await
+    let key_hex = key_store
+        .try_read()
+        .map(|ks| hex::encode(&ks.key()[..4]))
+        .unwrap_or_else(|_| "????".into());
     let token_set = !std::env::var("SHIMMER_JWT").unwrap_or_default().is_empty();
 
     Ok(serde_json::json!({
@@ -355,6 +361,91 @@ fn get_settings(
         "tokenConfigured": token_set,
         "hotkey": "⌘+⇧+P",
     }))
+}
+
+/// Register a new user account using an invite token.
+///
+/// After successful registration, updates the client bearer token and stores
+/// the JWT pair in the keychain.  If `kek_fragment` is present it is used to
+/// unwrap the org KEK that was embedded in the invite link.
+#[tauri::command]
+async fn auth_register(
+    invite_token: String,
+    email: String,
+    password: String,
+    name: String,
+    kek_fragment: Option<String>,
+    client: tauri::State<'_, Arc<RwLock<ShimmerClient>>>,
+    key_store: tauri::State<'_, Arc<RwLock<KeyStore>>>,
+) -> Result<(), CommandError> {
+    let auth = client
+        .read()
+        .await
+        .register(&invite_token, &email, &password, &name)
+        .await?;
+
+    // Update client bearer token
+    client.write().await.set_token(auth.access_token.clone());
+
+    // Unwrap KEK from invite fragment if provided
+    if let Some(fragment) = kek_fragment {
+        let kek = shimmer_core::encryption::unwrap_kek_from_invite(&fragment, &invite_token)
+            .map_err(|e| CommandError::Encryption(e.to_string()))?;
+        key_store.write().await.set_key(kek);
+    }
+
+    // Persist tokens in keychain
+    key_store
+        .read()
+        .await
+        .store_tokens(&auth.access_token, &auth.refresh_token);
+
+    info!(user_id = %auth.user_id, "user registered");
+    Ok(())
+}
+
+/// Authenticate with email and password.
+///
+/// Updates the client bearer token and stores the JWT pair in the keychain.
+#[tauri::command]
+async fn auth_login(
+    email: String,
+    password: String,
+    client: tauri::State<'_, Arc<RwLock<ShimmerClient>>>,
+    key_store: tauri::State<'_, Arc<RwLock<KeyStore>>>,
+) -> Result<(), CommandError> {
+    let auth = client.read().await.login(&email, &password).await?;
+
+    // Update client bearer token
+    client.write().await.set_token(auth.access_token.clone());
+
+    // Persist tokens in keychain
+    key_store
+        .read()
+        .await
+        .store_tokens(&auth.access_token, &auth.refresh_token);
+
+    info!(user_id = %auth.user_id, "user logged in");
+    Ok(())
+}
+
+/// Clear all stored credentials from the keychain (logout).
+#[tauri::command]
+async fn auth_logout(
+    key_store: tauri::State<'_, Arc<RwLock<KeyStore>>>,
+) -> Result<(), CommandError> {
+    key_store.read().await.clear_all();
+    info!("user logged out");
+    Ok(())
+}
+
+/// Check whether valid JWT tokens are stored in the keychain.
+#[tauri::command]
+async fn auth_status(
+    key_store: tauri::State<'_, Arc<RwLock<KeyStore>>>,
+) -> Result<bool, CommandError> {
+    let authenticated = key_store.read().await.load_tokens().is_some();
+    Ok(authenticated)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -370,7 +461,7 @@ pub fn run() {
 
     info!("shimmer starting");
 
-    let client = Arc::new(build_client().expect("build shimmer client"));
+    let client = Arc::new(RwLock::new(build_client().expect("build shimmer client")));
 
     let shortcut_handler =
         move |app: &tauri::AppHandle<_>,
@@ -390,17 +481,17 @@ pub fn run() {
                     }
                     if text.len() <= shimmer_core::MAX_PASTE_BYTES {
                         if let (Some(client), Some(key_store)) = (
-                            handle.try_state::<Arc<ShimmerClient>>(),
-                            handle.try_state::<Arc<KeyStore>>(),
+                            handle.try_state::<Arc<RwLock<ShimmerClient>>>(),
+                            handle.try_state::<Arc<RwLock<KeyStore>>>(),
                         ) {
-                            let kek = key_store.key();
+                            let kek = *key_store.read().await.key();
 
                             // Generate search tokens from clipboard content
-                            let search_key = derive_search_key(kek);
+                            let search_key = derive_search_key(&kek);
                             let search_tokens = extract_blind_tokens(&text, &search_key);
 
                             if let Ok(envelope) =
-                                encrypt_envelope(text.as_bytes(), kek, "tauri-client")
+                                encrypt_envelope(text.as_bytes(), &kek, "tauri-client")
                             {
                                 if let Ok(ciphertext_json) = serde_json::to_string(&envelope) {
                                     let opts = UploadOptions {
@@ -410,7 +501,7 @@ pub fn run() {
                                         ..UploadOptions::default()
                                     };
                                     if let Ok(id) =
-                                        client.upload(&ciphertext_json, &opts).await
+                                        client.read().await.upload(&ciphertext_json, &opts).await
                                     {
                                         let url = format!("phi://{id}");
                                         let _ = clipboard.write_text(url);
@@ -438,6 +529,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(client)
         .invoke_handler(tauri::generate_handler![
             paste_upload,
@@ -447,11 +539,17 @@ pub fn run() {
             paste_search,
             paste_delete,
             file_upload,
-            get_settings
+            get_settings,
+            auth_register,
+            auth_login,
+            auth_logout,
+            auth_status,
         ])
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().ok();
-            let key_store = Arc::new(KeyStore::load_or_create(app_data_dir.as_deref()));
+            let key_store = Arc::new(RwLock::new(KeyStore::load_or_create(
+                app_data_dir.as_deref(),
+            )));
             app.manage(key_store);
 
             let quit = MenuItem::with_id(app, "quit", "Quit Shimmer", true, None::<&str>)?;
@@ -483,6 +581,21 @@ pub fn run() {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_content_protected(true);
             }
+
+            // Background update check on startup
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match tauri_plugin_updater::UpdaterExt::updater(&handle) {
+                    Ok(updater) => match updater.check().await {
+                        Ok(Some(update)) => {
+                            tracing::info!(version = %update.version, "update available");
+                        }
+                        Ok(None) => tracing::debug!("no update available"),
+                        Err(e) => tracing::warn!(error = %e, "update check failed"),
+                    },
+                    Err(e) => tracing::debug!(error = %e, "updater not configured"),
+                }
+            });
 
             Ok(())
         })

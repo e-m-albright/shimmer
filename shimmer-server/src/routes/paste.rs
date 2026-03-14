@@ -1,8 +1,6 @@
 //! Paste routes — upload, fetch, list, search, delete.
 //!
-//! The server handles ciphertext only. It never has the KEK or plaintext.
-//! Metadata (visibility, content type, search tokens) lives in `SQLite`.
-//! Ciphertext blobs live in S3/file storage.
+//! Thin wrappers around `services::paste` — validate HTTP, call service, map errors.
 
 use std::sync::Arc;
 
@@ -12,11 +10,11 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use tracing::info;
 use validator::Validate;
 
 use crate::auth::Claims;
 use crate::db::PasteRecord;
+use crate::services::paste::{self, CreatePasteInput, PasteCaller, PasteServiceError};
 use crate::AppState;
 
 /// Max ciphertext size the server will accept (50 MiB — file uploads).
@@ -126,6 +124,17 @@ impl From<PasteRecord> for PasteMeta {
     }
 }
 
+/// Map `PasteServiceError` to HTTP status + message.
+fn map_paste_err(e: PasteServiceError) -> (StatusCode, String) {
+    match e {
+        PasteServiceError::NotFound => (StatusCode::NOT_FOUND, e.to_string()),
+        PasteServiceError::Forbidden => (StatusCode::FORBIDDEN, e.to_string()),
+        PasteServiceError::Storage(_)
+        | PasteServiceError::Db(_)
+        | PasteServiceError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 /// Upload an encrypted paste (text or file).
 pub async fn upload(
     State(state): State<Arc<AppState>>,
@@ -154,160 +163,58 @@ pub async fn upload(
         ));
     }
 
-    // Check role: read_only users cannot upload
-    if claims.role == "read_only" {
-        return Err((StatusCode::FORBIDDEN, "read-only users cannot upload".into()));
-    }
-
-    let id = uuid::Uuid::new_v4().to_string();
-    let storage_key = format!("{}/{}", claims.sub, id);
-    let now = chrono::Utc::now();
-
-    // Compute expiry
-    let expires_at = req.ttl_hours.map(|hours| {
-        let h = i64::try_from(hours).unwrap_or(i64::MAX);
-        (now + chrono::Duration::hours(h)).to_rfc3339()
-    });
-
-    // Store ciphertext blob
-    state
-        .storage
-        .put(&storage_key, req.ciphertext.as_bytes())
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // Build search token pairs: (token, type)
-    let mut token_pairs: Vec<(String, String)> = Vec::new();
-    for t in &req.search_tokens {
-        token_pairs.push((t.clone(), "content".into()));
-    }
-    for t in &req.title_tokens {
-        token_pairs.push((t.clone(), "title".into()));
-    }
-    for t in &req.filename_tokens {
-        token_pairs.push((t.clone(), "filename".into()));
-    }
-    for t in &req.tag_tokens {
-        token_pairs.push((t.clone(), "tag".into()));
-    }
-
-    // Store metadata in DB
-    let paste = PasteRecord {
-        id: id.clone(),
-        org_id: claims.org.clone(),
-        user_id: claims.sub.clone(),
-        user_name: claims.name.clone(),
-        content_type: req.content_type.clone(),
-        encrypted_title: req.title_encrypted.clone(),
-        encrypted_filename: req.filename_encrypted.clone(),
-        visibility: req.visibility.clone(),
-        #[allow(clippy::cast_possible_truncation)]
-        size_bytes: req.ciphertext.len() as i64,
-        ttl_hours: req.ttl_hours.map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
-        burn_on_read: req.burn_on_read,
-        created_at: now.to_rfc3339(),
-        expires_at,
+    let caller = PasteCaller {
+        sub: claims.sub,
+        name: claims.name,
+        org: claims.org,
+        role: claims.role,
     };
 
-    let num_tokens = token_pairs.len();
-    let db_state = state.clone();
-    tokio::task::spawn_blocking(move || db_state.db.insert_paste(&paste, &token_pairs))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let input = CreatePasteInput {
+        ciphertext: req.ciphertext,
+        search_tokens: req.search_tokens,
+        title_encrypted: req.title_encrypted,
+        title_tokens: req.title_tokens,
+        content_type: req.content_type,
+        filename_encrypted: req.filename_encrypted,
+        filename_tokens: req.filename_tokens,
+        visibility: req.visibility,
+        ttl_hours: req.ttl_hours,
+        burn_on_read: req.burn_on_read,
+        tag_tokens: req.tag_tokens,
+    };
 
-    info!(
-        paste_id = %id,
-        user_id = %claims.sub,
-        content_type = %req.content_type,
-        size = req.ciphertext.len(),
-        visibility = %req.visibility,
-        tokens = num_tokens,
-        "paste uploaded"
-    );
+    let output = paste::create_paste(state, &caller, input)
+        .await
+        .map_err(map_paste_err)?;
 
     Ok((
         StatusCode::CREATED,
         Json(UploadResponse {
-            phi_url: format!("phi://{id}"),
-            id,
+            id: output.id,
+            phi_url: output.phi_url,
         }),
     ))
 }
 
 /// Fetch an encrypted paste by ID.
-///
-/// Checks visibility permissions:
-/// - private: only owner
-/// - org: any member of the same org
-/// - link: any authenticated user
 pub async fn fetch(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Path(id): Path<String>,
 ) -> Result<Vec<u8>, (StatusCode, String)> {
-    uuid::Uuid::parse_str(&id)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid paste ID".into()))?;
+    uuid::Uuid::parse_str(&id).map_err(|_| (StatusCode::BAD_REQUEST, "invalid paste ID".into()))?;
 
-    // Look up paste metadata for permissions + storage key
-    let db_state = state.clone();
-    let paste_id = id.clone();
-    let paste = tokio::task::spawn_blocking(move || db_state.db.get_paste(&paste_id))
+    let caller = PasteCaller {
+        sub: claims.sub,
+        name: claims.name,
+        org: claims.org,
+        role: claims.role,
+    };
+
+    paste::fetch_paste(state, &caller, &id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("paste {id} not found")))?;
-
-    // Check visibility permissions
-    match paste.visibility.as_str() {
-        "private" => {
-            if paste.user_id != claims.sub {
-                return Err((StatusCode::FORBIDDEN, "private paste".into()));
-            }
-        }
-        "org" => {
-            if paste.org_id != claims.org {
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    "paste belongs to different org".into(),
-                ));
-            }
-        }
-        "link" => {
-            // Anyone with auth can access link-shared pastes
-        }
-        _ => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "unknown visibility".into(),
-            ));
-        }
-    }
-
-    // Fetch from blob storage using the owner's key path
-    let storage_key = format!("{}/{}", paste.user_id, id);
-    let data = state
-        .storage
-        .get(&storage_key)
-        .await
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
-
-    info!(paste_id = %id, user_id = %claims.sub, "paste fetched");
-
-    // Handle burn-on-read: delete after first fetch
-    if paste.burn_on_read {
-        let del_state = state.clone();
-        let del_key = storage_key;
-        let del_id = id.clone();
-        tokio::spawn(async move {
-            let _ = del_state.storage.delete(&del_key).await;
-            let _ =
-                tokio::task::spawn_blocking(move || del_state.db.delete_paste(&del_id)).await;
-        });
-        info!(paste_id = %id, "burn-on-read: paste scheduled for deletion");
-    }
-
-    Ok(data)
+        .map_err(map_paste_err)
 }
 
 /// Query parameters for list/search.
@@ -335,9 +242,6 @@ pub async fn list(
     claims: Claims,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<PasteMeta>>, (StatusCode, String)> {
-    let org_id = claims.org.clone();
-    let user_id = claims.sub.clone();
-
     let records = if let Some(ref token_str) = query.tokens {
         // Search mode: split comma-separated tokens
         let tokens: Vec<String> = token_str
@@ -346,24 +250,13 @@ pub async fn list(
             .filter(|t| !t.is_empty())
             .collect();
 
-        let db_state = state.clone();
-        tokio::task::spawn_blocking(move || {
-            db_state.db.search_pastes(&org_id, &user_id, &tokens)
-        })
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        paste::search_pastes(state, &claims.org, &claims.sub, &tokens)
+            .await
+            .map_err(map_paste_err)?
     } else {
-        // List mode
-        let limit = query.limit.min(200);
-        let offset = query.offset.max(0);
-        let db_state = state.clone();
-        tokio::task::spawn_blocking(move || {
-            db_state.db.list_pastes(&org_id, &user_id, limit, offset)
-        })
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        paste::list_pastes(state, &claims.org, &claims.sub, query.limit, query.offset)
+            .await
+            .map_err(map_paste_err)?
     };
 
     let metas: Vec<PasteMeta> = records.into_iter().map(PasteMeta::from).collect();
@@ -376,41 +269,18 @@ pub async fn delete(
     claims: Claims,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    uuid::Uuid::parse_str(&id)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid paste ID".into()))?;
+    uuid::Uuid::parse_str(&id).map_err(|_| (StatusCode::BAD_REQUEST, "invalid paste ID".into()))?;
 
-    // Look up paste for permission check
-    let db_state = state.clone();
-    let paste_id = id.clone();
-    let paste = tokio::task::spawn_blocking(move || db_state.db.get_paste(&paste_id))
+    let caller = PasteCaller {
+        sub: claims.sub,
+        name: claims.name,
+        org: claims.org,
+        role: claims.role,
+    };
+
+    paste::delete_paste(state, &caller, &id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("paste {id} not found")))?;
+        .map_err(map_paste_err)?;
 
-    // Permission: owner can delete own, admin can delete any in org
-    let is_owner = paste.user_id == claims.sub;
-    let is_admin = claims.is_admin() && paste.org_id == claims.org;
-    if !is_owner && !is_admin {
-        return Err((StatusCode::FORBIDDEN, "cannot delete this paste".into()));
-    }
-
-    // Delete blob
-    let storage_key = format!("{}/{}", paste.user_id, id);
-    state
-        .storage
-        .delete(&storage_key)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // Delete metadata
-    let db_state = state.clone();
-    let del_id = id.clone();
-    tokio::task::spawn_blocking(move || db_state.db.delete_paste(&del_id))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    info!(paste_id = %id, user_id = %claims.sub, "paste deleted");
     Ok(StatusCode::NO_CONTENT)
 }

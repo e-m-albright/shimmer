@@ -78,7 +78,7 @@ impl FromRequestParts<Arc<AppState>> for Claims {
             .strip_prefix("Bearer ")
             .ok_or((StatusCode::UNAUTHORIZED, "invalid authorization format"))?;
 
-        verify_token(token, &state.jwt_secret)
+        verify_token(token, &state.config.server.jwt_secret)
             .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid token"))
     }
 }

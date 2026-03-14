@@ -24,6 +24,7 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
@@ -31,6 +32,7 @@ tokio = { workspace = true }
 hex = { workspace = true }
 base64 = { workspace = true }
 zeroize = { workspace = true }
+security-framework = "3"
 
 # HTTP client — talks to shimmer-server
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }

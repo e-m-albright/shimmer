@@ -1,26 +1,25 @@
-//! Invite flow — generate invite links + join an org.
+//! Invite flow routes — generate invite links + join an org.
 //!
-//! Security model:
-//! - Admin generates invite → gets `shimmer://join/TOKEN#ENCRYPTED_KEK`
-//! - TOKEN is server-side, maps to {`org_id`, role, `expires_at`, `single_use`}
-//! - `#ENCRYPTED_KEK` is a URL fragment (never sent to server by HTTP spec)
-//! - New user sends TOKEN to `POST /api/org/join` → server returns org info
-//! - Client-side: decrypts KEK from URL fragment, stores locally
-//! - Server never sees the KEK
+//! Thin wrappers around `services::invite` — validate HTTP, call service, map errors.
 
 use std::sync::Arc;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
-use tracing::info;
 
-use crate::auth::{self, Claims};
-use crate::db::{InviteRecord, MemberRecord};
+use crate::auth::Claims;
+use crate::services::invite::{self, CreateInviteInput, InviteCaller, InviteServiceError};
 use crate::AppState;
+
+/// Pending invite summary returned by list endpoint.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingInviteResponse {
+    pub token: String,
+    pub org_id: String,
+    pub expires_at: String,
+    pub role: String,
+}
 
 /// Generate invite request.
 #[derive(Deserialize)]
@@ -59,171 +58,76 @@ pub struct GenerateInviteResponse {
     pub expires_at: String,
 }
 
+/// Map `InviteServiceError` to HTTP status + message.
+fn map_invite_err(e: InviteServiceError) -> (StatusCode, String) {
+    match e {
+        InviteServiceError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+        InviteServiceError::Forbidden => (StatusCode::FORBIDDEN, "admin only".into()),
+        InviteServiceError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+        InviteServiceError::Db(_) | InviteServiceError::Internal(_) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        }
+    }
+}
+
 /// Generate an invite link. Admin only.
 pub async fn generate_invite(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Json(req): Json<GenerateInviteRequest>,
 ) -> Result<(StatusCode, Json<GenerateInviteResponse>), (StatusCode, String)> {
-    if !claims.is_admin() {
-        return Err((StatusCode::FORBIDDEN, "admin only".into()));
-    }
+    let caller = InviteCaller {
+        sub: claims.sub,
+        name: claims.name,
+        org: claims.org,
+        role: claims.role,
+    };
 
-    let valid_roles = ["member", "read_only"];
-    if !valid_roles.contains(&req.role.as_str()) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("invite role must be one of: {}", valid_roles.join(", ")),
-        ));
-    }
-
-    if req.ttl_hours > 168 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "invite TTL cannot exceed 168 hours (1 week)".into(),
-        ));
-    }
-
-    let token = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now();
-    let ttl = i64::try_from(req.ttl_hours).unwrap_or(24);
-    let expires_at = (now + chrono::Duration::hours(ttl)).to_rfc3339();
-
-    let invite = InviteRecord {
-        token: token.clone(),
-        org_id: claims.org.clone(),
-        role: req.role.clone(),
-        created_by: claims.sub.clone(),
-        expires_at: expires_at.clone(),
-        used_at: None,
-        used_by: None,
+    let input = CreateInviteInput {
+        role: req.role,
+        ttl_hours: req.ttl_hours,
         single_use: req.single_use,
     };
 
-    let db_state = state.clone();
-    tokio::task::spawn_blocking(move || db_state.db.create_invite(&invite))
+    let output = invite::create_invite(state, &caller, input)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    info!(
-        token = %token,
-        org_id = %claims.org,
-        role = %req.role,
-        admin = %claims.sub,
-        "invite generated"
-    );
+        .map_err(map_invite_err)?;
 
     Ok((
         StatusCode::CREATED,
         Json(GenerateInviteResponse {
-            token,
-            org_id: claims.org,
-            expires_at,
+            token: output.token,
+            org_id: output.org_id,
+            expires_at: output.expires_at,
         }),
     ))
 }
 
-/// Join request — sent by a new user clicking an invite link.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JoinRequest {
-    /// Invite token (from the URL path, NOT the fragment).
-    pub token: String,
-    /// New user's display name.
-    pub name: String,
-}
-
-/// Join response — sent after successfully joining an org.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JoinResponse {
-    /// Org ID the user just joined.
-    pub org_id: String,
-    /// User ID assigned to the new member.
-    pub user_id: String,
-    /// JWT token for future API calls.
-    pub jwt: String,
-    /// Role assigned.
-    pub role: String,
-    /// Server URL (for client config).
-    pub server_url: String,
-}
-
-/// Join an org using an invite token.
-///
-/// This is an unauthenticated endpoint — the invite token IS the auth.
-/// After joining, the user gets a JWT for future API calls.
-pub async fn join_org(
+/// List pending (unused, unexpired) invites for the caller's org. Admin only.
+pub async fn list_invites_handler(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<JoinRequest>,
-) -> Result<(StatusCode, Json<JoinResponse>), (StatusCode, String)> {
-    let user_id = format!("u_{}", uuid::Uuid::new_v4().simple());
-    let token = req.token.clone();
+    claims: Claims,
+) -> Result<Json<Vec<PendingInviteResponse>>, (StatusCode, String)> {
+    if claims.role != "admin" {
+        return Err((StatusCode::FORBIDDEN, "admin only".into()));
+    }
 
-    // Consume the invite (validates it's unexpired and unused)
+    let org_id = claims.org.clone();
     let db_state = state.clone();
-    let join_user_id = user_id.clone();
-    let invite = tokio::task::spawn_blocking(move || {
-        db_state.db.consume_invite(&token, &join_user_id)
-    })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(|e| match e {
-        crate::db::DbError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
-        other => (StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
-    })?;
-
-    // Add the new member
-    let member = MemberRecord {
-        id: format!("m_{}", uuid::Uuid::new_v4()),
-        org_id: invite.org_id.clone(),
-        user_id: user_id.clone(),
-        name: req.name.clone(),
-        role: invite.role.clone(),
-        joined_at: chrono::Utc::now().to_rfc3339(),
-    };
-
-    let db_state = state.clone();
-    tokio::task::spawn_blocking(move || db_state.db.add_member(&member))
+    let invites = tokio::task::spawn_blocking(move || db_state.db.list_pending_invites(&org_id))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Issue JWT for the new member
-    let exp = usize::try_from(
-        (chrono::Utc::now() + chrono::Duration::days(30)).timestamp(),
-    )
-    .unwrap_or(usize::MAX);
+    let response: Vec<PendingInviteResponse> = invites
+        .into_iter()
+        .map(|inv| PendingInviteResponse {
+            token: inv.token,
+            org_id: inv.org_id,
+            expires_at: inv.expires_at,
+            role: inv.role,
+        })
+        .collect();
 
-    let claims = Claims {
-        sub: user_id.clone(),
-        name: req.name.clone(),
-        role: invite.role.clone(),
-        org: invite.org_id.clone(),
-        exp,
-    };
-
-    let jwt = auth::create_token(&claims, &state.jwt_secret)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let server_url = format!("{}:{}", state.config.host, state.config.port);
-
-    info!(
-        user_id = %user_id,
-        org_id = %invite.org_id,
-        role = %invite.role,
-        "user joined org via invite"
-    );
-
-    Ok((
-        StatusCode::CREATED,
-        Json(JoinResponse {
-            org_id: invite.org_id,
-            user_id,
-            jwt,
-            role: invite.role,
-            server_url,
-        }),
-    ))
+    Ok(Json(response))
 }
