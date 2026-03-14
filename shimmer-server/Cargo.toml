@@ -32,6 +32,9 @@ jsonwebtoken = "9"
 argon2 = { workspace = true }
 sha2 = { workspace = true }
 
+# CLI
+clap = { workspace = true }
+
 # Config
 toml = "0.8"
 
