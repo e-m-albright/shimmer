@@ -156,7 +156,10 @@ pub async fn upload(
 
     // Check role: read_only users cannot upload
     if claims.role == "read_only" {
-        return Err((StatusCode::FORBIDDEN, "read-only users cannot upload".into()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "read-only users cannot upload".into(),
+        ));
     }
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -246,8 +249,7 @@ pub async fn fetch(
     claims: Claims,
     Path(id): Path<String>,
 ) -> Result<Vec<u8>, (StatusCode, String)> {
-    uuid::Uuid::parse_str(&id)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid paste ID".into()))?;
+    uuid::Uuid::parse_str(&id).map_err(|_| (StatusCode::BAD_REQUEST, "invalid paste ID".into()))?;
 
     // Look up paste metadata for permissions + storage key
     let db_state = state.clone();
@@ -301,8 +303,7 @@ pub async fn fetch(
         let del_id = id.clone();
         tokio::spawn(async move {
             let _ = del_state.storage.delete(&del_key).await;
-            let _ =
-                tokio::task::spawn_blocking(move || del_state.db.delete_paste(&del_id)).await;
+            let _ = tokio::task::spawn_blocking(move || del_state.db.delete_paste(&del_id)).await;
         });
         info!(paste_id = %id, "burn-on-read: paste scheduled for deletion");
     }
@@ -347,12 +348,10 @@ pub async fn list(
             .collect();
 
         let db_state = state.clone();
-        tokio::task::spawn_blocking(move || {
-            db_state.db.search_pastes(&org_id, &user_id, &tokens)
-        })
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        tokio::task::spawn_blocking(move || db_state.db.search_pastes(&org_id, &user_id, &tokens))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     } else {
         // List mode
         let limit = query.limit.min(200);
@@ -376,8 +375,7 @@ pub async fn delete(
     claims: Claims,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    uuid::Uuid::parse_str(&id)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid paste ID".into()))?;
+    uuid::Uuid::parse_str(&id).map_err(|_| (StatusCode::BAD_REQUEST, "invalid paste ID".into()))?;
 
     // Look up paste for permission check
     let db_state = state.clone();

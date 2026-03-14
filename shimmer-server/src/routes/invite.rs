@@ -10,11 +10,7 @@
 
 use std::sync::Arc;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -164,15 +160,14 @@ pub async fn join_org(
     // Consume the invite (validates it's unexpired and unused)
     let db_state = state.clone();
     let join_user_id = user_id.clone();
-    let invite = tokio::task::spawn_blocking(move || {
-        db_state.db.consume_invite(&token, &join_user_id)
-    })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(|e| match e {
-        crate::db::DbError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
-        other => (StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
-    })?;
+    let invite =
+        tokio::task::spawn_blocking(move || db_state.db.consume_invite(&token, &join_user_id))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(|e| match e {
+                crate::db::DbError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+                other => (StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
+            })?;
 
     // Add the new member
     let member = MemberRecord {
@@ -191,10 +186,8 @@ pub async fn join_org(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Issue JWT for the new member
-    let exp = usize::try_from(
-        (chrono::Utc::now() + chrono::Duration::days(30)).timestamp(),
-    )
-    .unwrap_or(usize::MAX);
+    let exp = usize::try_from((chrono::Utc::now() + chrono::Duration::days(30)).timestamp())
+        .unwrap_or(usize::MAX);
 
     let claims = Claims {
         sub: user_id.clone(),
@@ -204,10 +197,10 @@ pub async fn join_org(
         exp,
     };
 
-    let jwt = auth::create_token(&claims, &state.jwt_secret)
+    let jwt = auth::create_token(&claims, &state.config.server.jwt_secret)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let server_url = format!("{}:{}", state.config.host, state.config.port);
+    let server_url = state.config.server.bind.clone();
 
     info!(
         user_id = %user_id,

@@ -148,11 +148,12 @@ pub async fn update_member_role(
     let db_state = state.clone();
     let role = req.role.clone();
     let target_id = user_id.clone();
-    let updated =
-        tokio::task::spawn_blocking(move || db_state.db.update_member_role(&org_id, &target_id, &role))
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let updated = tokio::task::spawn_blocking(move || {
+        db_state.db.update_member_role(&org_id, &target_id, &role)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if !updated {
         return Err((StatusCode::NOT_FOUND, format!("member {user_id} not found")));

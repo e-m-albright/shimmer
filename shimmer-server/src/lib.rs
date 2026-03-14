@@ -22,7 +22,6 @@ pub struct AppState {
     pub storage: Box<dyn Storage>,
     pub db: db::Database,
     pub config: config::ServerConfig,
-    pub jwt_secret: String,
 }
 
 impl fmt::Debug for AppState {
@@ -30,7 +29,6 @@ impl fmt::Debug for AppState {
         f.debug_struct("AppState")
             .field("config", &self.config)
             .field("db", &self.db)
-            .field("jwt_secret", &"[REDACTED]")
             .finish()
     }
 }

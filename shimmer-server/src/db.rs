@@ -446,7 +446,9 @@ impl Database {
                 },
             )
             .optional()?
-            .ok_or_else(|| DbError::NotFound("invite not found, expired, or already used".into()))?;
+            .ok_or_else(|| {
+                DbError::NotFound("invite not found, expired, or already used".into())
+            })?;
 
         // Mark as used
         if invite.single_use {
@@ -592,9 +594,7 @@ impl Database {
         let conn = self.conn()?;
 
         // Build parameterized query for N tokens with AND semantics
-        let placeholders: Vec<String> = (0..tokens.len())
-            .map(|i| format!("?{}", i + 3))
-            .collect();
+        let placeholders: Vec<String> = (0..tokens.len()).map(|i| format!("?{}", i + 3)).collect();
         let token_count = tokens.len();
 
         let sql = format!(
@@ -629,7 +629,10 @@ impl Database {
         }
         param_values.push(Box::new(token_count as i64));
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(std::convert::AsRef::as_ref).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values
+            .iter()
+            .map(std::convert::AsRef::as_ref)
+            .collect();
 
         let rows = stmt
             .query_map(param_refs.as_slice(), Self::row_to_paste)?

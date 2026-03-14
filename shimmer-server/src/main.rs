@@ -22,26 +22,26 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Config
-    let config = config::ServerConfig::load()?;
-    info!(port = config.port, "shimmer-server starting");
+    let config = config::ServerConfig::load();
+    info!(bind = %config.server.bind, "shimmer-server starting");
 
     // Bind address extracted before config is moved into AppState
-    let addr = format!("{}:{}", config.host, config.port);
+    let addr = config.server.bind.clone();
 
     // Storage backend (blob storage for ciphertext)
-    let storage: Box<dyn Storage> = match config.storage_backend.as_str() {
+    let storage: Box<dyn Storage> = match config.storage.backend.as_str() {
         "s3" => {
-            let s3 = S3Storage::new(
-                &config.s3_bucket,
-                config.s3_endpoint.as_deref(),
-                config.s3_region.as_deref(),
-            )
-            .await?;
+            let s3_cfg = config.storage.s3.as_ref();
+            let bucket = s3_cfg.map(|s| s.bucket.as_str()).unwrap_or("shimmer");
+            let endpoint = s3_cfg.and_then(|s| s.endpoint.as_deref());
+            let region = s3_cfg.and_then(|s| s.region.as_deref());
+            let s3 = S3Storage::new(bucket, endpoint, region).await?;
             Box::new(s3)
         }
         _ => {
             let path = config
-                .file_storage_path
+                .storage
+                .path
                 .as_deref()
                 .unwrap_or("./shimmer-storage");
             Box::new(FileStorage::new(path))
@@ -49,19 +49,12 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Metadata database
-    let db_path = config
-        .db_path
-        .as_deref()
-        .unwrap_or("./shimmer-metadata.db");
-    let db = Database::open(std::path::Path::new(db_path))?;
+    let db = Database::open(std::path::Path::new(&config.database.path))?;
 
     // Auto-create the dev org if configured and not already present
-    if let Some(ref org_id) = config.org_id {
+    if let Some(ref org_id) = config.org.id {
         if db.get_org(org_id)?.is_none() {
-            let org_name = config
-                .org_name
-                .as_deref()
-                .unwrap_or("Development Org");
+            let org_name = config.org.name.as_deref().unwrap_or("Development Org");
             db.create_org(&shimmer_server::db::OrgRecord {
                 id: org_id.clone(),
                 name: org_name.to_string(),
@@ -71,14 +64,10 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let jwt_secret =
-        std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-in-production".into());
-
     let state = Arc::new(AppState {
         storage,
         db,
         config,
-        jwt_secret,
     });
 
     let app = build_router(state);

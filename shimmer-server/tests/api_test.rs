@@ -9,7 +9,7 @@ use axum_test::TestServer;
 use shimmer_core::storage::FileStorage;
 use shimmer_server::{
     auth::{create_token, Claims},
-    config::ServerConfig,
+    config::{DatabaseSection, OrgSection, ServerConfig, ServerSection, StorageSection},
     db::Database,
     AppState,
 };
@@ -19,16 +19,23 @@ fn test_server(tmp: &tempfile::TempDir) -> (TestServer, String) {
     let jwt_secret = "test-secret".to_string();
 
     let config = ServerConfig {
-        host: "127.0.0.1".into(),
-        port: 0,
-        storage_backend: "file".into(),
-        s3_endpoint: None,
-        s3_bucket: "test".into(),
-        s3_region: None,
-        file_storage_path: Some(tmp.path().to_string_lossy().into_owned()),
-        db_path: None,
-        org_id: Some("org_test".into()),
-        org_name: Some("Test Org".into()),
+        server: ServerSection {
+            bind: "127.0.0.1:0".into(),
+            jwt_secret: jwt_secret.clone(),
+        },
+        storage: StorageSection {
+            backend: "file".into(),
+            path: Some(tmp.path().to_string_lossy().into_owned()),
+            s3: None,
+        },
+        database: DatabaseSection {
+            path: "./shimmer-metadata.db".into(),
+        },
+        org: OrgSection {
+            id: Some("org_test".into()),
+            name: Some("Test Org".into()),
+        },
+        smtp: None,
     };
 
     let storage = Box::new(FileStorage::new(tmp.path()));
@@ -57,7 +64,6 @@ fn test_server(tmp: &tempfile::TempDir) -> (TestServer, String) {
         storage,
         db,
         config,
-        jwt_secret: jwt_secret.clone(),
     });
 
     let app = shimmer_server::build_router(state);
@@ -384,10 +390,7 @@ async fn file_upload_with_content_type() {
     let items: Vec<serde_json::Value> = list_resp.json();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["contentType"], "image/png");
-    assert_eq!(
-        items[0]["encryptedFilename"],
-        "encrypted-filename-base64"
-    );
+    assert_eq!(items[0]["encryptedFilename"], "encrypted-filename-base64");
 }
 
 #[tokio::test]
