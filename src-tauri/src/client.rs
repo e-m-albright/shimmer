@@ -265,23 +265,82 @@ impl ShimmerClient {
         Ok(())
     }
 
-    /// Join an org using an invite token.
+    /// Register a new user with an invite token.
     ///
     /// # Errors
     ///
     /// Returns `CommandError::Server` on failure.
-    #[allow(dead_code)] // Used when invite flow UI is wired
-    pub async fn join_org(
+    pub async fn register(
         &self,
         invite_token: &str,
+        email: &str,
+        password: &str,
         name: &str,
-    ) -> Result<JoinResponse, CommandError> {
+    ) -> Result<AuthResponse, CommandError> {
         let resp = self
             .http
-            .post(format!("{}/api/org/join", self.base_url))
+            .post(format!("{}/api/auth/register", self.base_url))
             .json(&serde_json::json!({
-                "token": invite_token,
+                "inviteToken": invite_token,
+                "email": email,
+                "password": password,
                 "name": name,
+            }))
+            .send()
+            .await
+            .map_err(|e| CommandError::Server(e.to_string()))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(CommandError::Server(format!("{status}: {body}")));
+        }
+
+        resp.json()
+            .await
+            .map_err(|e| CommandError::Internal(e.to_string()))
+    }
+
+    /// Authenticate with email and password.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CommandError::Server` on failure.
+    pub async fn login(&self, email: &str, password: &str) -> Result<AuthResponse, CommandError> {
+        let resp = self
+            .http
+            .post(format!("{}/api/auth/login", self.base_url))
+            .json(&serde_json::json!({
+                "email": email,
+                "password": password,
+            }))
+            .send()
+            .await
+            .map_err(|e| CommandError::Server(e.to_string()))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(CommandError::Server(format!("{status}: {body}")));
+        }
+
+        resp.json()
+            .await
+            .map_err(|e| CommandError::Internal(e.to_string()))
+    }
+
+    /// Refresh an access token using a refresh token.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CommandError::Server` on failure.
+    #[allow(dead_code)] // Used when token-refresh flow is wired
+    pub async fn refresh_token(&self, refresh: &str) -> Result<AuthResponse, CommandError> {
+        let resp = self
+            .http
+            .post(format!("{}/api/auth/refresh", self.base_url))
+            .json(&serde_json::json!({
+                "refreshToken": refresh,
             }))
             .send()
             .await
@@ -299,14 +358,11 @@ impl ShimmerClient {
     }
 }
 
-/// Response from joining an org.
-#[allow(dead_code)] // Used when invite flow UI is wired
-#[derive(Debug, Deserialize, Serialize)]
+/// Response from auth endpoints (register, login, refresh).
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct JoinResponse {
-    pub org_id: String,
+pub struct AuthResponse {
     pub user_id: String,
-    pub jwt: String,
-    pub role: String,
-    pub server_url: String,
+    pub access_token: String,
+    pub refresh_token: String,
 }
