@@ -632,3 +632,98 @@ async fn register_with_invalid_invite() {
 
     register_resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn two_phase_invite_flow() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (server, admin_token) = test_server(&tmp);
+
+    // 1. Admin creates invite
+    let invite_resp = server
+        .post("/api/org/invite")
+        .authorization_bearer(&admin_token)
+        .json(&serde_json::json!({
+            "role": "member",
+            "ttlHours": 24,
+        }))
+        .await;
+
+    invite_resp.assert_status(axum::http::StatusCode::CREATED);
+    let invite: serde_json::Value = invite_resp.json();
+    let invite_token = invite["token"].as_str().unwrap();
+
+    // 2. Verify token is base64url (not UUID) — ~43 chars, no UUID-style hyphens
+    assert!(
+        invite_token.len() >= 42 && invite_token.len() <= 44,
+        "token should be ~43 chars (base64url of 32 bytes), got {} chars",
+        invite_token.len()
+    );
+    // UUID format is 8-4-4-4-12 with exactly 4 hyphens; base64url tokens won't have that
+    let hyphen_count = invite_token.chars().filter(|&c| c == '-').count();
+    assert_ne!(
+        hyphen_count, 4,
+        "token should not look like a UUID: {invite_token}"
+    );
+    // UUIDs are 36 chars; base64url of 32 bytes is 43 chars
+    assert_ne!(
+        invite_token.len(),
+        36,
+        "token length should not match UUID format"
+    );
+
+    // 3. List pending invites — should be 1
+    let list_resp = server
+        .get("/api/org/invites")
+        .authorization_bearer(&admin_token)
+        .await;
+
+    list_resp.assert_status_ok();
+    let pending: Vec<serde_json::Value> = list_resp.json();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0]["token"].as_str().unwrap(), invite_token);
+    assert_eq!(pending[0]["role"], "member");
+
+    // 4. New user registers with the invite token
+    let register_resp = server
+        .post("/api/auth/register")
+        .json(&serde_json::json!({
+            "inviteToken": invite_token,
+            "email": "twophase@example.com",
+            "password": "password123",
+            "name": "Two Phase User",
+        }))
+        .await;
+
+    register_resp.assert_status_ok();
+    let body: serde_json::Value = register_resp.json();
+    assert!(body["userId"].as_str().is_some());
+    assert!(body["accessToken"].as_str().is_some());
+
+    // 5. List pending invites again — should be 0 (consumed)
+    let list_resp2 = server
+        .get("/api/org/invites")
+        .authorization_bearer(&admin_token)
+        .await;
+
+    list_resp2.assert_status_ok();
+    let pending2: Vec<serde_json::Value> = list_resp2.json();
+    assert_eq!(
+        pending2.len(),
+        0,
+        "invite should be consumed after registration"
+    );
+}
+
+#[tokio::test]
+async fn list_invites_requires_admin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (server, _admin_token) = test_server(&tmp);
+
+    let member_token = make_user_token("test-secret", "u_member", "Member", "member");
+    let resp = server
+        .get("/api/org/invites")
+        .authorization_bearer(&member_token)
+        .await;
+
+    resp.assert_status(axum::http::StatusCode::FORBIDDEN);
+}

@@ -32,6 +32,7 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         )
         // Invite flow
         .route("/org/invite", post(invite::generate_invite))
+        .route("/org/invites", get(invite::list_invites_handler))
 }
 
 async fn health() -> &'static str {

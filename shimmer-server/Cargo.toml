@@ -43,6 +43,8 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 hex = { workspace = true }
+rand = { workspace = true }
+base64 = { workspace = true }
 
 # Validation
 validator = { version = "0.20", features = ["derive"] }

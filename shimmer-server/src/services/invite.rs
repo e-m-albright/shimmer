@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use rand::RngCore;
 use tracing::info;
 
 use crate::auth::{self, Claims};
@@ -73,6 +75,16 @@ impl InviteCaller {
     }
 }
 
+/// Generate a 256-bit random invite token, base64url-encoded (no padding).
+///
+/// The token provides enough entropy for HKDF key derivation in the
+/// two-phase KEK transport protocol.
+fn generate_invite_token() -> String {
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
 /// Generate an invite link. Admin only.
 ///
 /// # Errors
@@ -101,7 +113,7 @@ pub async fn create_invite(
         ));
     }
 
-    let token = uuid::Uuid::new_v4().to_string();
+    let token = generate_invite_token();
     let now = chrono::Utc::now();
     let ttl = i64::try_from(input.ttl_hours).unwrap_or(24);
     let expires_at = (now + chrono::Duration::hours(ttl)).to_rfc3339();

@@ -628,6 +628,36 @@ impl Database {
         Ok(())
     }
 
+    /// List pending (unused, unexpired) invites for an org.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError::Sqlite` on database errors.
+    pub fn list_pending_invites(&self, org_id: &str) -> Result<Vec<InviteRecord>, DbError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT token, org_id, role, created_by, expires_at, used_at, used_by, single_use
+             FROM invites
+             WHERE org_id = ?1 AND used_at IS NULL AND expires_at > datetime('now')
+             ORDER BY expires_at ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![org_id], |row| {
+                Ok(InviteRecord {
+                    token: row.get(0)?,
+                    org_id: row.get(1)?,
+                    role: row.get(2)?,
+                    created_by: row.get(3)?,
+                    expires_at: row.get(4)?,
+                    used_at: row.get(5)?,
+                    used_by: row.get(6)?,
+                    single_use: row.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Consume an invite token. Returns the invite if valid and not yet used.
     ///
     /// For single-use invites, marks it as used. For multi-use invites, leaves it.

@@ -11,6 +11,16 @@ use crate::auth::Claims;
 use crate::services::invite::{self, CreateInviteInput, InviteCaller, InviteServiceError};
 use crate::AppState;
 
+/// Pending invite summary returned by list endpoint.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingInviteResponse {
+    pub token: String,
+    pub org_id: String,
+    pub expires_at: String,
+    pub role: String,
+}
+
 /// Generate invite request.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,4 +101,33 @@ pub async fn generate_invite(
             expires_at: output.expires_at,
         }),
     ))
+}
+
+/// List pending (unused, unexpired) invites for the caller's org. Admin only.
+pub async fn list_invites_handler(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+) -> Result<Json<Vec<PendingInviteResponse>>, (StatusCode, String)> {
+    if claims.role != "admin" {
+        return Err((StatusCode::FORBIDDEN, "admin only".into()));
+    }
+
+    let org_id = claims.org.clone();
+    let db_state = state.clone();
+    let invites = tokio::task::spawn_blocking(move || db_state.db.list_pending_invites(&org_id))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let response: Vec<PendingInviteResponse> = invites
+        .into_iter()
+        .map(|inv| PendingInviteResponse {
+            token: inv.token,
+            org_id: inv.org_id,
+            expires_at: inv.expires_at,
+            role: inv.role,
+        })
+        .collect();
+
+    Ok(Json(response))
 }
