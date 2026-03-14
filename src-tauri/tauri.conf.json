@@ -14,6 +14,12 @@
       "desktop": {
         "schemes": ["phi"]
       }
+    },
+    "updater": {
+      "endpoints": [
+        "https://github.com/YOUR_ORG/shimmer/releases/latest/download/latest.json"
+      ],
+      "pubkey": ""
     }
   },
   "app": {

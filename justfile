@@ -182,6 +182,18 @@ deps-dupes:
     cargo tree --workspace --duplicates
 
 # -----------------------------------------------------------------------------
+# Distribution
+# -----------------------------------------------------------------------------
+
+# Build .dmg for distribution
+build-dmg:
+    npm run tauri build
+
+# Generate updater signing keys (one-time)
+updater-keys:
+    npm run tauri signer generate -- -w ~/.tauri/shimmer.key
+
+# -----------------------------------------------------------------------------
 # Infrastructure (MinIO)
 # -----------------------------------------------------------------------------
 

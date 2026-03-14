@@ -529,6 +529,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(client)
         .invoke_handler(tauri::generate_handler![
             paste_upload,
@@ -580,6 +581,21 @@ pub fn run() {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_content_protected(true);
             }
+
+            // Background update check on startup
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match tauri_plugin_updater::UpdaterExt::updater(&handle) {
+                    Ok(updater) => match updater.check().await {
+                        Ok(Some(update)) => {
+                            tracing::info!(version = %update.version, "update available");
+                        }
+                        Ok(None) => tracing::debug!("no update available"),
+                        Err(e) => tracing::warn!(error = %e, "update check failed"),
+                    },
+                    Err(e) => tracing::debug!(error = %e, "updater not configured"),
+                }
+            });
 
             Ok(())
         })
