@@ -8,9 +8,7 @@ use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::Claims;
-use crate::services::invite::{
-    self, CreateInviteInput, InviteCaller, InviteServiceError, RedeemInviteInput,
-};
+use crate::services::invite::{self, CreateInviteInput, InviteCaller, InviteServiceError};
 use crate::AppState;
 
 /// Generate invite request.
@@ -48,32 +46,6 @@ pub struct GenerateInviteResponse {
     pub org_id: String,
     /// When the invite expires.
     pub expires_at: String,
-}
-
-/// Join request — sent by a new user clicking an invite link.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JoinRequest {
-    /// Invite token (from the URL path, NOT the fragment).
-    pub token: String,
-    /// New user's display name.
-    pub name: String,
-}
-
-/// Join response — sent after successfully joining an org.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct JoinResponse {
-    /// Org ID the user just joined.
-    pub org_id: String,
-    /// User ID assigned to the new member.
-    pub user_id: String,
-    /// JWT token for future API calls.
-    pub jwt: String,
-    /// Role assigned.
-    pub role: String,
-    /// Server URL (for client config).
-    pub server_url: String,
 }
 
 /// Map `InviteServiceError` to HTTP status + message.
@@ -117,32 +89,6 @@ pub async fn generate_invite(
             token: output.token,
             org_id: output.org_id,
             expires_at: output.expires_at,
-        }),
-    ))
-}
-
-/// Join an org using an invite token.
-pub async fn join_org(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<JoinRequest>,
-) -> Result<(StatusCode, Json<JoinResponse>), (StatusCode, String)> {
-    let input = RedeemInviteInput {
-        token: req.token,
-        name: req.name,
-    };
-
-    let output = invite::redeem_invite(state, input)
-        .await
-        .map_err(map_invite_err)?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(JoinResponse {
-            org_id: output.org_id,
-            user_id: output.user_id,
-            jwt: output.jwt,
-            role: output.role,
-            server_url: output.server_url,
         }),
     ))
 }

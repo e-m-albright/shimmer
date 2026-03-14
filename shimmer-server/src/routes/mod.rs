@@ -1,5 +1,6 @@
 //! API route definitions.
 
+mod auth;
 mod invite;
 mod org;
 mod paste;
@@ -14,6 +15,10 @@ pub fn api_routes() -> Router<Arc<AppState>> {
     Router::new()
         // Health
         .route("/health", get(health))
+        // Auth (unauthenticated)
+        .route("/auth/register", post(auth::register_handler))
+        .route("/auth/login", post(auth::login_handler))
+        .route("/auth/refresh", post(auth::refresh_handler))
         // Paste CRUD + search
         .route("/paste", post(paste::upload))
         .route("/paste/{id}", get(paste::fetch).delete(paste::delete))
@@ -27,7 +32,6 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         )
         // Invite flow
         .route("/org/invite", post(invite::generate_invite))
-        .route("/org/join", post(invite::join_org))
 }
 
 async fn health() -> &'static str {

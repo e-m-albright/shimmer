@@ -412,20 +412,22 @@ async fn invite_flow() {
     let invite: serde_json::Value = invite_resp.json();
     let invite_token = invite["token"].as_str().unwrap();
 
-    // New user joins with invite token (no auth needed)
-    let join_resp = server
-        .post("/api/org/join")
+    // New user registers with invite token (uses auth register endpoint)
+    let register_resp = server
+        .post("/api/auth/register")
         .json(&serde_json::json!({
-            "token": invite_token,
+            "inviteToken": invite_token,
+            "email": "inviteuser@example.com",
+            "password": "password123",
             "name": "New User",
         }))
         .await;
 
-    join_resp.assert_status(axum::http::StatusCode::CREATED);
-    let join: serde_json::Value = join_resp.json();
-    assert_eq!(join["orgId"], "org_test");
-    assert_eq!(join["role"], "member");
-    assert!(join["jwt"].as_str().is_some());
+    register_resp.assert_status_ok();
+    let body: serde_json::Value = register_resp.json();
+    assert!(body["userId"].as_str().is_some());
+    assert!(body["accessToken"].as_str().is_some());
+    assert!(body["refreshToken"].as_str().is_some());
 }
 
 #[tokio::test]
@@ -442,4 +444,191 @@ async fn member_management() {
     let members: Vec<serde_json::Value> = list_resp.json();
     assert_eq!(members.len(), 1);
     assert_eq!(members[0]["role"], "admin");
+}
+
+// ---------------------------------------------------------------------------
+// Auth routes
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn register_with_valid_invite() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (server, admin_token) = test_server(&tmp);
+
+    // Admin generates an invite
+    let invite_resp = server
+        .post("/api/org/invite")
+        .authorization_bearer(&admin_token)
+        .json(&serde_json::json!({
+            "role": "member",
+            "ttlHours": 24,
+        }))
+        .await;
+
+    invite_resp.assert_status(axum::http::StatusCode::CREATED);
+    let invite: serde_json::Value = invite_resp.json();
+    let invite_token = invite["token"].as_str().unwrap();
+
+    // New user registers with the invite token
+    let register_resp = server
+        .post("/api/auth/register")
+        .json(&serde_json::json!({
+            "inviteToken": invite_token,
+            "email": "newuser@example.com",
+            "password": "securepass123",
+            "name": "New User",
+        }))
+        .await;
+
+    register_resp.assert_status_ok();
+    let body: serde_json::Value = register_resp.json();
+    assert!(body["userId"].as_str().is_some());
+    assert!(body["accessToken"].as_str().is_some());
+    assert!(body["refreshToken"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn login_with_valid_credentials() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (server, admin_token) = test_server(&tmp);
+
+    // Create invite + register
+    let invite_resp = server
+        .post("/api/org/invite")
+        .authorization_bearer(&admin_token)
+        .json(&serde_json::json!({ "role": "member", "ttlHours": 24 }))
+        .await;
+    let invite: serde_json::Value = invite_resp.json();
+    let invite_token = invite["token"].as_str().unwrap();
+
+    server
+        .post("/api/auth/register")
+        .json(&serde_json::json!({
+            "inviteToken": invite_token,
+            "email": "alice@example.com",
+            "password": "hunter2hunter2",
+            "name": "Alice",
+        }))
+        .await;
+
+    // Login with same credentials
+    let login_resp = server
+        .post("/api/auth/login")
+        .json(&serde_json::json!({
+            "email": "alice@example.com",
+            "password": "hunter2hunter2",
+        }))
+        .await;
+
+    login_resp.assert_status_ok();
+    let body: serde_json::Value = login_resp.json();
+    assert!(body["userId"].as_str().is_some());
+    assert!(body["accessToken"].as_str().is_some());
+    assert!(body["refreshToken"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn login_with_wrong_password() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (server, admin_token) = test_server(&tmp);
+
+    // Create invite + register
+    let invite_resp = server
+        .post("/api/org/invite")
+        .authorization_bearer(&admin_token)
+        .json(&serde_json::json!({ "role": "member", "ttlHours": 24 }))
+        .await;
+    let invite: serde_json::Value = invite_resp.json();
+    let invite_token = invite["token"].as_str().unwrap();
+
+    server
+        .post("/api/auth/register")
+        .json(&serde_json::json!({
+            "inviteToken": invite_token,
+            "email": "bob@example.com",
+            "password": "correctpass1",
+            "name": "Bob",
+        }))
+        .await;
+
+    // Login with wrong password
+    let login_resp = server
+        .post("/api/auth/login")
+        .json(&serde_json::json!({
+            "email": "bob@example.com",
+            "password": "wrongpassword",
+        }))
+        .await;
+
+    login_resp.assert_status_unauthorized();
+}
+
+#[tokio::test]
+async fn refresh_token_rotation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (server, admin_token) = test_server(&tmp);
+
+    // Create invite + register
+    let invite_resp = server
+        .post("/api/org/invite")
+        .authorization_bearer(&admin_token)
+        .json(&serde_json::json!({ "role": "member", "ttlHours": 24 }))
+        .await;
+    let invite: serde_json::Value = invite_resp.json();
+    let invite_token = invite["token"].as_str().unwrap();
+
+    let register_resp = server
+        .post("/api/auth/register")
+        .json(&serde_json::json!({
+            "inviteToken": invite_token,
+            "email": "carol@example.com",
+            "password": "carolpass123",
+            "name": "Carol",
+        }))
+        .await;
+
+    let reg_body: serde_json::Value = register_resp.json();
+    let refresh_token = reg_body["refreshToken"].as_str().unwrap();
+
+    // Refresh — should get new tokens
+    let refresh_resp = server
+        .post("/api/auth/refresh")
+        .json(&serde_json::json!({
+            "refreshToken": refresh_token,
+        }))
+        .await;
+
+    refresh_resp.assert_status_ok();
+    let new_body: serde_json::Value = refresh_resp.json();
+    let new_refresh = new_body["refreshToken"].as_str().unwrap();
+    assert_ne!(new_refresh, refresh_token);
+
+    // Old refresh token should fail (rotation)
+    let old_refresh_resp = server
+        .post("/api/auth/refresh")
+        .json(&serde_json::json!({
+            "refreshToken": refresh_token,
+        }))
+        .await;
+
+    old_refresh_resp.assert_status_unauthorized();
+}
+
+#[tokio::test]
+async fn register_with_invalid_invite() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (server, _admin_token) = test_server(&tmp);
+
+    // Try to register with a bogus invite token
+    let register_resp = server
+        .post("/api/auth/register")
+        .json(&serde_json::json!({
+            "inviteToken": "bogus-token-does-not-exist",
+            "email": "nobody@example.com",
+            "password": "password123",
+            "name": "Nobody",
+        }))
+        .await;
+
+    register_resp.assert_status(axum::http::StatusCode::BAD_REQUEST);
 }
