@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
 
+  type AuthState = "checking" | "unauthenticated" | "authenticated";
+  type OnboardStep = "welcome" | "set-password" | "done";
   type Tab = "paste" | "browse" | "team" | "settings";
 
   type PasteEntry = {
@@ -23,6 +25,21 @@
     tokenConfigured: boolean;
     hotkey: string;
   };
+
+  // Auth state
+  let authState = $state<AuthState>("checking");
+  let onboardStep = $state<OnboardStep>("welcome");
+  let inviteUrl = $state("");
+  let inviteToken = $state("");
+  let kekFragment = $state<string | null>(null);
+  let registerName = $state("");
+  let registerEmail = $state("");
+  let registerPassword = $state("");
+  let loginEmail = $state("");
+  let loginPassword = $state("");
+  let authError = $state("");
+  let authLoading = $state(false);
+  let showLogin = $state(false);
 
   let tab = $state<Tab>("paste");
   let pasteInput = $state("");
@@ -106,22 +123,80 @@
 
   let unlistenOpenUrl: (() => void) | undefined;
   let unlistenPasteSuccess: (() => void) | undefined;
+  let unlistenInviteLink: (() => void) | undefined;
 
-  onMount(() => {
+  function parseInviteUrl(url: string): { token: string; kek: string | null } | null {
+    // phi://join/<token>#<kek>
+    const match = url.match(/^phi:\/\/join\/([^#]+)(?:#(.+))?$/);
+    if (!match) return null;
+    return { token: match[1], kek: match[2] ?? null };
+  }
+
+  onMount(async () => {
     isTauri = typeof window !== "undefined" && !!(window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+
+    // Check auth status
+    if (isTauri) {
+      try {
+        const result = await invoke<{ authenticated: boolean }>("auth_status");
+        authState = result.authenticated ? "authenticated" : "unauthenticated";
+      } catch {
+        authState = "unauthenticated";
+      }
+    } else {
+      // In browser/dev mode without Tauri, skip auth
+      authState = "unauthenticated";
+    }
+
     if (isTauri) {
       import("@tauri-apps/api/event").then(({ listen }) => {
         listen("phi-paste-success", () => {
           showToast("Link copied to clipboard");
         }).then((fn) => { unlistenPasteSuccess = fn; });
+
+        listen<string>("invite-link-received", (event) => {
+          const parsed = parseInviteUrl(event.payload);
+          if (parsed) {
+            inviteToken = parsed.token;
+            kekFragment = parsed.kek;
+            inviteUrl = event.payload;
+            onboardStep = "set-password";
+            if (authState !== "authenticated") {
+              authState = "unauthenticated";
+              showLogin = false;
+            }
+          }
+        }).then((fn) => { unlistenInviteLink = fn; });
       });
       import("@tauri-apps/plugin-deep-link").then(async ({ getCurrent, onOpenUrl }) => {
         const urls = await getCurrent();
-        const id = urls?.[0] ? extractId(urls[0]) : null;
-        if (id) fetchById(id);
+        const firstUrl = urls?.[0];
+        if (firstUrl) {
+          const parsed = parseInviteUrl(firstUrl);
+          if (parsed) {
+            inviteToken = parsed.token;
+            kekFragment = parsed.kek;
+            inviteUrl = firstUrl;
+            onboardStep = "set-password";
+          } else {
+            const id = extractId(firstUrl);
+            if (id) fetchById(id);
+          }
+        }
         unlistenOpenUrl = await onOpenUrl((urls) => {
-          const id = urls[0] ? extractId(urls[0]) : null;
-          if (id) fetchById(id);
+          const u = urls[0];
+          if (!u) return;
+          const parsed = parseInviteUrl(u);
+          if (parsed) {
+            inviteToken = parsed.token;
+            kekFragment = parsed.kek;
+            inviteUrl = u;
+            onboardStep = "set-password";
+            if (authState !== "authenticated") showLogin = false;
+          } else {
+            const id = extractId(u);
+            if (id) fetchById(id);
+          }
         });
       });
     }
@@ -132,6 +207,7 @@
     if (searchTimeout) clearTimeout(searchTimeout);
     unlistenOpenUrl?.();
     unlistenPasteSuccess?.();
+    unlistenInviteLink?.();
   });
 
   // ── Paste tab ──
@@ -337,6 +413,79 @@
     if (t === "settings") loadSettings();
   }
 
+  // ── Auth handlers ──
+
+  function handleInviteSubmit(event: Event) {
+    event.preventDefault();
+    authError = "";
+    const parsed = parseInviteUrl(inviteUrl.trim());
+    if (!parsed) {
+      authError = "Invalid invite link. Expected format: phi://join/<token>#<kek>";
+      return;
+    }
+    inviteToken = parsed.token;
+    kekFragment = parsed.kek;
+    onboardStep = "set-password";
+  }
+
+  async function handleRegister(event: Event) {
+    event.preventDefault();
+    authError = "";
+    if (!registerName.trim()) { authError = "Name is required"; return; }
+    if (!registerEmail.trim()) { authError = "Email is required"; return; }
+    if (!registerPassword) { authError = "Password is required"; return; }
+    authLoading = true;
+    try {
+      await invoke("auth_register", {
+        inviteToken,
+        email: registerEmail,
+        password: registerPassword,
+        name: registerName,
+        kekFragment,
+      });
+      authState = "authenticated";
+      onboardStep = "done";
+    } catch (e) {
+      authError = e instanceof Error ? e.message : String(e);
+    } finally {
+      authLoading = false;
+    }
+  }
+
+  async function handleLogin(event: Event) {
+    event.preventDefault();
+    authError = "";
+    if (!loginEmail.trim()) { authError = "Email is required"; return; }
+    if (!loginPassword) { authError = "Password is required"; return; }
+    authLoading = true;
+    try {
+      await invoke("auth_login", { email: loginEmail, password: loginPassword });
+      authState = "authenticated";
+    } catch (e) {
+      authError = e instanceof Error ? e.message : String(e);
+    } finally {
+      authLoading = false;
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await invoke("auth_logout");
+    } catch { /* ignore */ }
+    authState = "unauthenticated";
+    onboardStep = "welcome";
+    inviteUrl = "";
+    inviteToken = "";
+    kekFragment = null;
+    registerName = "";
+    registerEmail = "";
+    registerPassword = "";
+    loginEmail = "";
+    loginPassword = "";
+    authError = "";
+    showLogin = false;
+  }
+
   function formatSize(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -383,6 +532,139 @@
     return "";
   }
 </script>
+
+{#if authState === "checking"}
+  <div class="auth-screen">
+    <div class="auth-panel">
+      <div class="logo-text" style="font-size:1.5rem; margin-bottom:1rem">Shimmer</div>
+      <p class="section-desc" style="text-align:center">Loading…</p>
+    </div>
+  </div>
+{:else if authState === "unauthenticated"}
+  <div class="auth-screen">
+    <div class="auth-panel">
+      <div class="auth-logo">
+        <span class="logo-text" style="font-size:1.75rem">Shimmer</span>
+      </div>
+
+      {#if onboardStep === "welcome" && !showLogin}
+        <!-- Welcome: choose path -->
+        <h2 class="auth-heading">Welcome</h2>
+        <p class="auth-subheading">Paste an invite link to create your account, or sign in if you already have one.</p>
+
+        <form onsubmit={handleInviteSubmit} class="auth-form">
+          <div class="auth-field">
+            <label class="field-label" for="invite-url">Invite Link</label>
+            <input
+              id="invite-url"
+              type="text"
+              placeholder="phi://join/..."
+              bind:value={inviteUrl}
+              class="input"
+              autocomplete="off"
+              spellcheck={false}
+            />
+          </div>
+          {#if authError}
+            <div class="auth-error">{authError}</div>
+          {/if}
+          <button type="submit" class="btn btn-primary auth-btn">Continue with Invite</button>
+        </form>
+
+        <div class="auth-divider"><span>or</span></div>
+        <button class="btn btn-secondary auth-btn" onclick={() => { showLogin = true; authError = ""; }}>
+          Sign In
+        </button>
+
+      {:else if onboardStep === "welcome" && showLogin}
+        <!-- Login form -->
+        <h2 class="auth-heading">Sign In</h2>
+        <form onsubmit={handleLogin} class="auth-form">
+          <div class="auth-field">
+            <label class="field-label" for="login-email">Email</label>
+            <input
+              id="login-email"
+              type="email"
+              placeholder="you@example.com"
+              bind:value={loginEmail}
+              class="input"
+              autocomplete="email"
+            />
+          </div>
+          <div class="auth-field">
+            <label class="field-label" for="login-password">Password</label>
+            <input
+              id="login-password"
+              type="password"
+              placeholder="••••••••"
+              bind:value={loginPassword}
+              class="input"
+              autocomplete="current-password"
+            />
+          </div>
+          {#if authError}
+            <div class="auth-error">{authError}</div>
+          {/if}
+          <button type="submit" class="btn btn-primary auth-btn" disabled={authLoading}>
+            {authLoading ? "Signing in…" : "Sign In"}
+          </button>
+        </form>
+        <button class="btn btn-secondary auth-btn" style="margin-top:0.5rem" onclick={() => { showLogin = false; authError = ""; }}>
+          Back
+        </button>
+
+      {:else if onboardStep === "set-password"}
+        <!-- Register form -->
+        <h2 class="auth-heading">Create Account</h2>
+        <p class="auth-subheading">You're joining via invite. Set up your account details below.</p>
+        <form onsubmit={handleRegister} class="auth-form">
+          <div class="auth-field">
+            <label class="field-label" for="reg-name">Name</label>
+            <input
+              id="reg-name"
+              type="text"
+              placeholder="Your name"
+              bind:value={registerName}
+              class="input"
+              autocomplete="name"
+            />
+          </div>
+          <div class="auth-field">
+            <label class="field-label" for="reg-email">Email</label>
+            <input
+              id="reg-email"
+              type="email"
+              placeholder="you@example.com"
+              bind:value={registerEmail}
+              class="input"
+              autocomplete="email"
+            />
+          </div>
+          <div class="auth-field">
+            <label class="field-label" for="reg-password">Password</label>
+            <input
+              id="reg-password"
+              type="password"
+              placeholder="••••••••"
+              bind:value={registerPassword}
+              class="input"
+              autocomplete="new-password"
+            />
+          </div>
+          {#if authError}
+            <div class="auth-error">{authError}</div>
+          {/if}
+          <button type="submit" class="btn btn-primary auth-btn" disabled={authLoading}>
+            {authLoading ? "Creating account…" : "Create Account"}
+          </button>
+        </form>
+        <button class="btn btn-secondary auth-btn" style="margin-top:0.5rem" onclick={() => { onboardStep = "welcome"; authError = ""; inviteUrl = ""; inviteToken = ""; kekFragment = null; }}>
+          Back
+        </button>
+      {/if}
+    </div>
+  </div>
+{:else}
 
 <div class="app">
   <nav class="sidebar">
@@ -702,6 +984,19 @@
       </section>
 
       <section class="section">
+        <div class="section-label">Account</div>
+        <div class="settings-grid">
+          <div class="setting-row">
+            <span class="setting-key">Session</span>
+            <span class="setting-val">Signed in</span>
+          </div>
+        </div>
+        <button class="btn btn-secondary" style="margin-top:0.75rem" onclick={handleLogout}>
+          Sign Out
+        </button>
+      </section>
+
+      <section class="section">
         <div class="section-label">About</div>
         <div class="settings-grid">
           <div class="setting-row">
@@ -752,6 +1047,8 @@
     {/if}
   </main>
 </div>
+
+{/if}
 
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap');
@@ -1346,5 +1643,104 @@
     background: rgba(0, 0, 0, 0.2);
     padding: 0.15rem 0.35rem;
     border-radius: 4px;
+  }
+
+  /* Auth / Onboarding */
+  .auth-screen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    background: linear-gradient(165deg, #0f0f12 0%, #1a1a20 50%, #141418 100%);
+    color: #e4e4e7;
+  }
+
+  .auth-panel {
+    width: 100%;
+    max-width: 420px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .auth-logo {
+    text-align: center;
+    margin-bottom: 1.5rem;
+  }
+
+  .auth-heading {
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin: 0 0 0.5rem;
+    color: #f4f4f5;
+    text-align: center;
+  }
+
+  .auth-subheading {
+    font-size: 0.8125rem;
+    color: #71717a;
+    margin: 0 0 1.25rem;
+    text-align: center;
+    line-height: 1.5;
+  }
+
+  .auth-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.875rem;
+  }
+
+  .auth-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .auth-field .input {
+    flex: none;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .auth-btn {
+    width: 100%;
+    text-align: center;
+    padding: 0.65rem 1rem;
+    font-size: 0.9rem;
+  }
+
+  .auth-error {
+    font-size: 0.8125rem;
+    color: #fca5a5;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    border-radius: 8px;
+    padding: 0.6rem 0.875rem;
+  }
+
+  .auth-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 1rem 0;
+    color: #3f3f46;
+    font-size: 0.75rem;
+  }
+
+  .auth-divider::before,
+  .auth-divider::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .auth-divider span {
+    color: #52525b;
   }
 </style>
