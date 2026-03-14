@@ -29,6 +29,8 @@ tokio = { workspace = true }
 
 # Auth
 jsonwebtoken = "9"
+argon2 = { workspace = true }
+sha2 = { workspace = true }
 
 # Config
 toml = "0.8"
@@ -40,6 +42,7 @@ serde_json = { workspace = true }
 # Utilities
 uuid = { workspace = true }
 chrono = { workspace = true }
+hex = { workspace = true }
 
 # Validation
 validator = { version = "0.20", features = ["derive"] }

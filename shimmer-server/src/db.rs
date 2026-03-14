@@ -85,6 +85,26 @@ pub struct MemberRecord {
     pub joined_at: String,
 }
 
+/// User record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserRecord {
+    pub id: String,
+    pub email: String,
+    pub password_hash: String,
+    pub created_at: String,
+}
+
+/// Refresh token record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshTokenRecord {
+    pub id: String,
+    pub user_id: String,
+    pub token_hash: String,
+    pub expires_at: String,
+}
+
 /// Invite record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -211,6 +231,21 @@ impl Database {
 
             CREATE INDEX IF NOT EXISTS idx_members_org_user
                 ON members(org_id, user_id);
+
+            CREATE TABLE IF NOT EXISTS users (
+                id            TEXT PRIMARY KEY,
+                email         TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS refresh_tokens (
+                id         TEXT PRIMARY KEY,
+                user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                token_hash TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             ",
         )?;
         Ok(())
@@ -386,6 +421,185 @@ impl Database {
             params![org_id, user_id],
         )?;
         Ok(count > 0)
+    }
+
+    // =======================================================================
+    // Users
+    // =======================================================================
+
+    /// Create a new user.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError::Conflict` if the email is already registered.
+    pub fn create_user(&self, id: &str, email: &str, password_hash: &str) -> Result<(), DbError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO users (id, email, password_hash) VALUES (?1, ?2, ?3)",
+            params![id, email, password_hash],
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::SqliteFailure(err, _)
+                if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                DbError::Conflict(format!("email {email} already registered"))
+            }
+            other => DbError::Sqlite(other),
+        })?;
+        Ok(())
+    }
+
+    /// Get a user by email.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError::Sqlite` on database errors.
+    pub fn get_user_by_email(&self, email: &str) -> Result<Option<UserRecord>, DbError> {
+        let conn = self.conn()?;
+        let row = conn
+            .query_row(
+                "SELECT id, email, password_hash, created_at FROM users WHERE email = ?1",
+                params![email],
+                |row| {
+                    Ok(UserRecord {
+                        id: row.get(0)?,
+                        email: row.get(1)?,
+                        password_hash: row.get(2)?,
+                        created_at: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Get a user by ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError::Sqlite` on database errors.
+    pub fn get_user_by_id(&self, id: &str) -> Result<Option<UserRecord>, DbError> {
+        let conn = self.conn()?;
+        let row = conn
+            .query_row(
+                "SELECT id, email, password_hash, created_at FROM users WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(UserRecord {
+                        id: row.get(0)?,
+                        email: row.get(1)?,
+                        password_hash: row.get(2)?,
+                        created_at: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Get the first member record for a user (any org).
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError::Sqlite` on database errors.
+    pub fn get_member_by_user_id(&self, user_id: &str) -> Result<Option<MemberRecord>, DbError> {
+        let conn = self.conn()?;
+        let row = conn
+            .query_row(
+                "SELECT id, org_id, user_id, name, role, joined_at
+                 FROM members WHERE user_id = ?1 LIMIT 1",
+                params![user_id],
+                |row| {
+                    Ok(MemberRecord {
+                        id: row.get(0)?,
+                        org_id: row.get(1)?,
+                        user_id: row.get(2)?,
+                        name: row.get(3)?,
+                        role: row.get(4)?,
+                        joined_at: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    // =======================================================================
+    // Refresh tokens
+    // =======================================================================
+
+    /// Store a refresh token hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError::Sqlite` on database errors.
+    pub fn store_refresh_token(
+        &self,
+        id: &str,
+        user_id: &str,
+        token_hash: &str,
+        expires_at: &str,
+    ) -> Result<(), DbError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![id, user_id, token_hash, expires_at],
+        )?;
+        Ok(())
+    }
+
+    /// Look up a refresh token by its hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError::Sqlite` on database errors.
+    pub fn get_refresh_token_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<RefreshTokenRecord>, DbError> {
+        let conn = self.conn()?;
+        let row = conn
+            .query_row(
+                "SELECT id, user_id, token_hash, expires_at
+                 FROM refresh_tokens WHERE token_hash = ?1",
+                params![token_hash],
+                |row| {
+                    Ok(RefreshTokenRecord {
+                        id: row.get(0)?,
+                        user_id: row.get(1)?,
+                        token_hash: row.get(2)?,
+                        expires_at: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Delete a single refresh token by ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError::Sqlite` on database errors.
+    pub fn delete_refresh_token(&self, id: &str) -> Result<(), DbError> {
+        let conn = self.conn()?;
+        conn.execute("DELETE FROM refresh_tokens WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Delete all refresh tokens for a user.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError::Sqlite` on database errors.
+    pub fn delete_refresh_tokens_for_user(&self, user_id: &str) -> Result<(), DbError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "DELETE FROM refresh_tokens WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        Ok(())
     }
 
     // =======================================================================
@@ -843,5 +1057,50 @@ mod tests {
         let bob_view = db.list_pastes("org_test", "u_bob", 50, 0).unwrap();
         assert_eq!(bob_view.len(), 1);
         assert_eq!(bob_view[0].id, "p_org");
+    }
+
+    #[test]
+    fn create_and_get_user() {
+        let db = test_db();
+        db.create_user("u_1", "alice@example.com", "hashed_pw")
+            .unwrap();
+        let user = db.get_user_by_email("alice@example.com").unwrap().unwrap();
+        assert_eq!(user.id, "u_1");
+        assert_eq!(user.email, "alice@example.com");
+        assert_eq!(user.password_hash, "hashed_pw");
+        assert!(!user.created_at.is_empty());
+    }
+
+    #[test]
+    fn get_user_by_email_not_found() {
+        let db = test_db();
+        let result = db.get_user_by_email("nobody@example.com").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn refresh_token_lifecycle() {
+        let db = test_db();
+        db.create_user("u_1", "alice@example.com", "hashed_pw")
+            .unwrap();
+
+        let expires = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
+        db.store_refresh_token("rt_1", "u_1", "hash_abc", &expires)
+            .unwrap();
+
+        // Retrieve by hash
+        let token = db.get_refresh_token_by_hash("hash_abc").unwrap().unwrap();
+        assert_eq!(token.id, "rt_1");
+        assert_eq!(token.user_id, "u_1");
+
+        // Delete it
+        db.delete_refresh_token("rt_1").unwrap();
+        assert!(db.get_refresh_token_by_hash("hash_abc").unwrap().is_none());
+
+        // Store again and delete by user
+        db.store_refresh_token("rt_2", "u_1", "hash_def", &expires)
+            .unwrap();
+        db.delete_refresh_tokens_for_user("u_1").unwrap();
+        assert!(db.get_refresh_token_by_hash("hash_def").unwrap().is_none());
     }
 }
