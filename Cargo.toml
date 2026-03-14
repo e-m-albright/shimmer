@@ -64,6 +64,7 @@ chrono = { version = "0.4", features = ["serde"] }
 aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.22"
+hkdf = "0.12"
 hmac = "0.12"
 sha2 = "0.10"
 zeroize = { version = "1", features = ["derive"] }

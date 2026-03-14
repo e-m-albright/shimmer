@@ -4,7 +4,9 @@
 //! by the org's Key Encryption Key (KEK). The server never has the KEK.
 
 use aes_gcm::{aead::Aead, aead::KeyInit, Aes256Gcm};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD as BASE64URL};
+use base64::Engine;
+use hkdf::Hkdf;
 use hmac::Mac;
 use rand::RngCore;
 use zeroize::Zeroize;
@@ -170,6 +172,95 @@ pub fn extract_blind_tokens(plaintext: &str, search_key: &[u8; KEY_LEN]) -> Vec<
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// KEK wrapping for invite-token transport
+// ---------------------------------------------------------------------------
+
+const KEK_WRAP_SALT: &[u8] = b"shimmer-kek-wrap";
+const KEK_WRAP_INFO: &[u8] = b"v1";
+
+/// Derive a 256-bit wrapping key from an invite token using HKDF-SHA256.
+fn derive_wrapping_key(invite_token: &str) -> [u8; KEY_LEN] {
+    let hk = Hkdf::<sha2::Sha256>::new(Some(KEK_WRAP_SALT), invite_token.as_bytes());
+    let mut okm = [0u8; KEY_LEN];
+    // info is fixed-length and output length is valid for SHA-256, so expand cannot fail.
+    #[allow(clippy::expect_used)]
+    hk.expand(KEK_WRAP_INFO, &mut okm)
+        .expect("HKDF expand with 32-byte output cannot fail");
+    okm
+}
+
+/// Wrap a KEK for transport inside an invite URL.
+///
+/// Derives a wrapping key from `invite_token` via HKDF-SHA256, encrypts the
+/// KEK with AES-256-GCM, and returns a base64url-encoded (no padding) blob:
+/// `nonce (12 B) || ciphertext+tag`.
+///
+/// # Errors
+///
+/// Returns `CryptoError::Encrypt` if encryption fails.
+pub fn wrap_kek_for_invite(kek: &[u8; KEY_LEN], invite_token: &str) -> Result<String, CryptoError> {
+    let wrapping_key = derive_wrapping_key(invite_token);
+    let cipher = Aes256Gcm::new_from_slice(&wrapping_key)?;
+
+    let mut nonce = [0u8; NONCE_LEN];
+    rand::thread_rng().fill_bytes(&mut nonce);
+
+    let ciphertext = cipher
+        .encrypt(&nonce.into(), kek.as_slice())
+        .map_err(|e| CryptoError::Encrypt(e.to_string()))?;
+
+    let mut blob = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+    blob.extend_from_slice(&nonce);
+    blob.extend_from_slice(&ciphertext);
+
+    Ok(BASE64URL.encode(&blob))
+}
+
+/// Unwrap a KEK that was wrapped for invite-token transport.
+///
+/// Base64url-decodes the blob, derives the same wrapping key from
+/// `invite_token`, and decrypts with AES-256-GCM.
+///
+/// # Errors
+///
+/// Returns `CryptoError::Decrypt` if decryption fails or the payload is
+/// malformed, `CryptoError::InvalidKey` if the unwrapped key has the wrong
+/// length.
+pub fn unwrap_kek_from_invite(
+    wrapped: &str,
+    invite_token: &str,
+) -> Result<[u8; KEY_LEN], CryptoError> {
+    let blob = BASE64URL
+        .decode(wrapped)
+        .map_err(|e| CryptoError::Decrypt(format!("base64url decode failed: {e}")))?;
+
+    if blob.len() < NONCE_LEN + 1 {
+        return Err(CryptoError::Decrypt("wrapped KEK payload too short".into()));
+    }
+
+    let (nonce_bytes, ciphertext) = blob.split_at(NONCE_LEN);
+    let nonce = aes_gcm::Nonce::from_slice(nonce_bytes);
+
+    let wrapping_key = derive_wrapping_key(invite_token);
+    let cipher = Aes256Gcm::new_from_slice(&wrapping_key)?;
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| CryptoError::Decrypt(e.to_string()))?;
+
+    if plaintext.len() != KEY_LEN {
+        return Err(CryptoError::InvalidKey(format!(
+            "unwrapped KEK is {} bytes, expected {KEY_LEN}",
+            plaintext.len()
+        )));
+    }
+
+    let mut key = [0u8; KEY_LEN];
+    key.copy_from_slice(&plaintext);
+    Ok(key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +310,23 @@ mod tests {
         let search_key = derive_search_key(&kek);
         let tokens = extract_blind_tokens("John Smith MRN-12345", &search_key);
         assert_eq!(tokens.len(), 3); // "john", "smith", "mrn-12345"
+    }
+
+    #[test]
+    fn wrap_and_unwrap_kek_with_invite_token() {
+        let kek = generate_key();
+        let invite_token = "dGVzdC1pbnZpdGUtdG9rZW4tMzItYnl0ZXMtbG9uZw";
+        let wrapped = wrap_kek_for_invite(&kek, invite_token).unwrap();
+        let unwrapped = unwrap_kek_from_invite(&wrapped, invite_token).unwrap();
+        assert_eq!(kek, unwrapped);
+    }
+
+    #[test]
+    fn unwrap_kek_with_wrong_token_fails() {
+        let kek = generate_key();
+        let wrapped = wrap_kek_for_invite(&kek, "correct-token").unwrap();
+        let result = unwrap_kek_from_invite(&wrapped, "wrong-token");
+        assert!(result.is_err());
     }
 
     // =========================================================================
